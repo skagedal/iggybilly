@@ -1,0 +1,62 @@
+[package]
+name = "iggybilly"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Web
+axum = { version = "0.8", features = ["multipart", "macros"] }
+axum-extra = { version = "0.10", features = ["query"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "trace"] }
+tower-sessions = "0.14"
+tower-sessions-sqlx-store = { version = "0.15", features = ["sqlite"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Templates
+askama = "0.13"
+
+# DB
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "macros", "migrate", "time"] }
+
+# Auth / crypto
+argon2 = "0.5"
+rand = "0.8"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_urlencoded = "0.7"
+
+# Errors / logging
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Time
+time = { version = "0.3", features = ["serde", "formatting", "macros"] }
+
+# Misc
+uuid = { version = "1", features = ["v4"] }
+
+# Audio metadata (pure Rust, no ffmpeg). Reads ID3v2 from mp3 and MP4
+# atoms from m4a — covers iPhone Voice Memos.
+lofty = "0.24"
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
+
+[dev-dependencies]
+# Real HTTP client with a cookie store so tests can drive the running
+# router across multiple requests with session state, just like a
+# browser would. rustls-tls keeps the binary off OpenSSL.
+reqwest = { version = "0.12", default-features = false, features = ["cookies", "multipart", "rustls-tls"] }
+tempfile = "3"

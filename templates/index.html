@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+{% block title %}Clips — iggybilly{% endblock %}
+{% block head %}
+<script src="https://unpkg.com/wavesurfer.js@7"></script>
+{% endblock %}
+{% block nav %}
+  <span class="username">{{ username }}</span>
+  <a href="/account">Account</a>
+  <form method="post" action="/logout" class="inline"><button type="submit" class="link">Sign out</button></form>
+{% endblock %}
+{% block content %}
+<section>
+  <h2>Upload</h2>
+  <form method="post" action="/clips" enctype="multipart/form-data" class="upload">
+    <label>Audio file <input type="file" name="audio" accept="audio/*" required></label>
+    <button type="submit">Upload</button>
+    <p class="hint">Name is taken from the filename and can be renamed per-clip afterwards.</p>
+  </form>
+</section>
+
+<section>
+  <h2>Clips</h2>
+
+  {% if !active_filters.is_empty() %}
+    <div class="active-filters">
+      <span class="label-prefix">Filtering by:</span>
+      {% for f in active_filters %}
+        <span class="filter-chip">
+          {{ f.name }}<a class="remove" href="{{ f.remove_href }}" title="Remove filter">×</a>
+        </span>
+      {% endfor %}
+      <a class="clear" href="/">Clear all</a>
+    </div>
+  {% endif %}
+
+  {% if clips.is_empty() %}
+    <p>{% if active_filters.is_empty() %}No clips yet. Upload the first one above.{% else %}No clips match these labels.{% endif %}</p>
+  {% else %}
+    <ul class="clip-list">
+      {% for clip in clips %}
+        <li class="clip-card" data-clip-id="{{ clip.id }}" data-audio-url="/clips/{{ clip.id }}/audio">
+          <div class="clip-head">
+            <a class="clip-name" href="/clips/{{ clip.id }}">{{ clip.name }}</a>
+            <span class="meta">
+              {% if let Some(rec) = clip.recording_date %}Recorded {{ rec }} · {% endif %}
+              uploaded by {{ clip.uploader }} on {{ clip.uploaded_at }}
+            </span>
+          </div>
+          <div class="mini-player">
+            <button type="button" class="play">▶</button>
+            <div class="waveform"></div>
+            <span class="time">0:00</span>
+            <a class="download" href="/clips/{{ clip.id }}/audio?download=1" download="{{ clip.original_filename }}" title="Download">⤓</a>
+          </div>
+          {% if !clip.labels.is_empty() %}
+            <div class="labels">
+              {% for l in clip.labels %}<a class="label" href="{{ l.href }}">{{ l.name }}</a>{% endfor %}
+            </div>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+</section>
+
+<script>
+  // Lazy-init wavesurfer on first play click. Otherwise visiting / with
+  // N clips would trigger N audio downloads up front.
+  document.querySelectorAll('.clip-card').forEach(card => {
+    const url = card.dataset.audioUrl;
+    const wfEl = card.querySelector('.waveform');
+    const btn = card.querySelector('.play');
+    const timeEl = card.querySelector('.time');
+    let ws = null;
+
+    const fmt = s => {
+      const m = Math.floor(s / 60);
+      const r = Math.floor(s % 60).toString().padStart(2, '0');
+      return `${m}:${r}`;
+    };
+
+    btn.addEventListener('click', () => {
+      if (!ws) {
+        ws = WaveSurfer.create({
+          container: wfEl,
+          waveColor: '#aaa',
+          progressColor: '#3a7',
+          height: 48,
+          url: url,
+        });
+        ws.on('audioprocess', t => timeEl.textContent = fmt(t));
+        ws.on('finish', () => { btn.textContent = '▶'; });
+        ws.on('ready', () => ws.play());
+        btn.textContent = '⏸';
+        return;
+      }
+      if (ws.isPlaying()) {
+        ws.pause();
+        btn.textContent = '▶';
+      } else {
+        ws.play();
+        btn.textContent = '⏸';
+      }
+    });
+  });
+</script>
+{% endblock %}

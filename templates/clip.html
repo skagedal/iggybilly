@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}{{ name }} — iggybilly{% endblock %}
+{% block head %}
+<script src="https://unpkg.com/wavesurfer.js@7"></script>
+{% endblock %}
+{% block nav %}
+  <span class="username">{{ username }}</span>
+  <a href="/">Clips</a>
+  <a href="/account">Account</a>
+  <form method="post" action="/logout" class="inline"><button type="submit" class="link">Sign out</button></form>
+{% endblock %}
+{% block content %}
+<section>
+  {% include "_clip_header.html" %}
+
+  <p class="meta">
+    {% if let Some(rec) = recording_date %}Recorded {{ rec }}<br>{% endif %}
+    Uploaded by {{ uploader }} on {{ uploaded_at }}<br>
+    <span class="orig">{{ original_filename }}</span> ({{ content_type }})
+  </p>
+
+  <div id="waveform" data-audio-url="/clips/{{ clip_id }}/audio"></div>
+  <div class="player-controls">
+    <button id="play">Play / Pause</button>
+    <span id="time">0:00</span>
+    <a class="download" href="/clips/{{ clip_id }}/audio?download=1" download="{{ original_filename }}">Download</a>
+  </div>
+
+  <h2>Labels</h2>
+  <div id="labels">
+    {% include "_label_list.html" %}
+  </div>
+
+  <form class="label-add"
+        hx-post="/clips/{{ clip_id }}/labels"
+        hx-target="#labels"
+        hx-swap="innerHTML">
+    <label>Add a label
+      <input name="name"
+             autocomplete="off"
+             hx-get="/labels/search"
+             hx-trigger="focus, keyup changed delay:150ms"
+             hx-target="#label-suggestions"
+             hx-include="[name=name]"
+             hx-vals='{"clip_id": "{{ clip_id }}"}'>
+    </label>
+    <div id="label-suggestions"></div>
+    <button type="submit">Add</button>
+  </form>
+</section>
+
+<script>
+  (function () {
+    const el = document.getElementById('waveform');
+    const ws = WaveSurfer.create({
+      container: el,
+      waveColor: '#888',
+      progressColor: '#3a7',
+      height: 96,
+      url: el.dataset.audioUrl,
+    });
+    document.getElementById('play').addEventListener('click', () => ws.playPause());
+    const time = document.getElementById('time');
+    const fmt = s => {
+      const m = Math.floor(s / 60);
+      const r = Math.floor(s % 60).toString().padStart(2, '0');
+      return `${m}:${r}`;
+    };
+    ws.on('audioprocess', t => time.textContent = fmt(t));
+    ws.on('ready', () => time.textContent = fmt(0));
+  })();
+
+  // Clicking a suggestion fills the input and submits.
+  document.addEventListener('click', e => {
+    const s = e.target.closest('[data-label-suggestion]');
+    if (!s) return;
+    const input = document.querySelector('.label-add input[name=name]');
+    input.value = s.dataset.labelSuggestion;
+    document.querySelector('.label-add').requestSubmit();
+    document.getElementById('label-suggestions').innerHTML = '';
+  });
+
+  // Hide suggestions when the input loses focus, but with a delay so a
+  // click on a suggestion still registers before the list disappears.
+  document.addEventListener('focusout', e => {
+    if (!e.target.matches('.label-add input[name=name]')) return;
+    setTimeout(() => {
+      const within = document.activeElement && document.activeElement.closest('#label-suggestions');
+      if (!within) document.getElementById('label-suggestions').innerHTML = '';
+    }, 150);
+  });
+</script>
+{% endblock %}

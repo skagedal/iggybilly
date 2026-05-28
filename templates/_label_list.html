@@ -1,0 +1,15 @@
+<ul class="label-list">
+  {% for l in labels %}
+    <li class="label">
+      <a href="{{ l.filter_href }}">{{ l.name }}</a>
+      <button class="remove"
+              hx-delete="/clips/{{ clip_id }}/labels/{{ l.id }}"
+              hx-target="#labels"
+              hx-swap="innerHTML"
+              title="Remove label">×</button>
+    </li>
+  {% endfor %}
+  {% if labels.is_empty() %}
+    <li class="empty">No labels yet.</li>
+  {% endif %}
+</ul>

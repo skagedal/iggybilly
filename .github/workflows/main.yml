@@ -43,7 +43,12 @@ jobs:
           context: .
           file: main.Dockerfile
           push: true
-          tags: skagedal/iggybilly:latest
+          # Push both an immutable SHA tag (used for the rollout) and
+          # :latest (for humans pulling locally). The rollout uses the
+          # SHA so a cached :latest on a node can't roll the wrong image.
+          tags: |
+            skagedal/iggybilly:latest
+            skagedal/iggybilly:${{ github.sha }}
       - name: Set up kubectl
         uses: azure/setup-kubectl@v4
       - name: Configure kubeconfig
@@ -52,5 +57,6 @@ jobs:
         run: ./ci/setup-kubeconfig
       - name: Roll out the new image
         run: |
-          kubectl -n iggybilly rollout restart deploy/iggybilly
+          kubectl -n iggybilly set image deploy/iggybilly \
+            iggybilly=skagedal/iggybilly:${{ github.sha }}
           kubectl -n iggybilly rollout status deploy/iggybilly --timeout=180s

@@ -1,9 +1,9 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
 use axum::{
     Router,
-    extract::FromRequestParts,
+    extract::{DefaultBodyLimit, FromRequestParts},
     http::request::Parts,
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -11,7 +11,9 @@ use axum::{
 use sqlx::SqlitePool;
 use tokio::net::TcpListener;
 use tower_http::{services::ServeDir, trace::TraceLayer};
-use tower_sessions::{Expiry, Session, SessionManagerLayer};
+use tower_sessions::{
+    Expiry, ExpiredDeletion, Session, SessionManagerLayer, cookie::SameSite,
+};
 use tower_sessions_sqlx_store::SqliteStore;
 
 use crate::{
@@ -22,6 +24,11 @@ use crate::{
 };
 
 pub const SESSION_USER_KEY: &str = "user";
+
+/// Hard cap on a single upload request, in bytes. Audio clips for a band
+/// app comfortably fit under this; anything larger is almost certainly
+/// not the file the user meant to upload.
+pub const MAX_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -46,15 +53,31 @@ pub async fn build_app(pool: SqlitePool, config: Arc<Config>) -> Result<Router> 
     let session_store = SqliteStore::new(pool.clone());
     session_store.migrate().await?;
 
+    // Reap expired sessions hourly so the tower_sessions table doesn't
+    // grow unbounded. The task lives for the process lifetime.
+    tokio::spawn(
+        session_store
+            .clone()
+            .continuously_delete_expired(Duration::from_secs(3600)),
+    );
+
     let session_layer = SessionManagerLayer::new(session_store)
-        .with_secure(false)
+        .with_secure(config.secure_cookies)
+        // Strict means a cross-site form-POST or hx-delete won't carry
+        // the cookie — our CSRF mitigation for state-changing endpoints.
+        // The only UX cost is that following an external link to the
+        // app doesn't carry the session on that first navigation.
+        .with_same_site(SameSite::Strict)
         .with_expiry(Expiry::OnInactivity(time::Duration::days(30)));
 
     let state = AppState { pool, config };
 
     Ok(Router::new()
         .route("/", get(clips::list))
-        .route("/clips", post(clips::upload))
+        .route(
+            "/clips",
+            post(clips::upload).layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
+        )
         .route("/clips/{id}", get(clips::detail))
         .route("/clips/{id}/audio", get(clips::audio))
         .route("/clips/{id}/name", post(clips::rename))
@@ -66,10 +89,15 @@ pub async fn build_app(pool: SqlitePool, config: Arc<Config>) -> Result<Router> 
         .route("/login", get(auth_handlers::login_form).post(auth_handlers::login))
         .route("/logout", post(auth_handlers::logout))
         .route("/account", get(account::form).post(account::change_password))
+        .route("/healthz", get(healthz))
         .nest_service("/static", ServeDir::new("static"))
         .layer(session_layer)
         .layer(TraceLayer::new_for_http())
         .with_state(state))
+}
+
+async fn healthz() -> &'static str {
+    "ok"
 }
 
 /// Extractor that resolves the logged-in user from the session, or

@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use askama::Template;
 use axum::{
     Form,
+    body::Body,
     extract::{Multipart, Path as AxumPath, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Redirect, Response},
@@ -10,11 +11,13 @@ use axum::{
 use axum_extra::extract::Query;
 use serde::Deserialize;
 use sqlx::SqlitePool;
+use tokio::io::AsyncWriteExt;
+use tokio_util::io::ReaderStream;
 
 use crate::{
     error::{AppError, AppResult},
     handlers::render,
-    web::{AppState, CurrentUser, CurrentUserApi},
+    web::{AppState, CurrentUser, CurrentUserApi, MAX_UPLOAD_BYTES},
 };
 
 #[derive(Debug)]
@@ -280,18 +283,28 @@ pub async fn audio(
     let (storage, content_type, original_filename) = row.ok_or(AppError::NotFound)?;
 
     let path = state.config.audio_dir.join(&storage);
-    // Read whole file into memory. Clips are small (a few MB) and a
-    // single-replica deployment with a handful of users won't notice.
-    // Switch to streamed Range responses if/when seeking large files
-    // becomes important.
-    let bytes = tokio::fs::read(&path).await?;
+    // Stream from disk so we don't pull the whole file into RAM. Browsers
+    // need Content-Length up front to show download progress and to
+    // support range requests if/when we add them later.
+    let file = tokio::fs::File::open(&path).await?;
+    let len = file.metadata().await?.len();
+    let stream = ReaderStream::new(file);
+    let body = Body::from_stream(stream);
 
     let mut headers = HeaderMap::new();
+    // content_type is what we wrote at upload time — one of our
+    // allow-listed audio MIME types, never the uploader's claim. Pair
+    // with nosniff so a curious browser doesn't reinterpret it as HTML.
     headers.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_str(&content_type)
             .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
     );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(header::CONTENT_LENGTH, HeaderValue::from(len));
     headers.insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("private, max-age=3600"),
@@ -309,7 +322,7 @@ pub async fn audio(
             headers.insert(header::CONTENT_DISPOSITION, v);
         }
     }
-    Ok((headers, bytes).into_response())
+    Ok((headers, body).into_response())
 }
 
 /// Replace anything that isn't a plain ASCII filename-safe character
@@ -337,85 +350,193 @@ fn percent_encode_filename(name: &str) -> String {
     out
 }
 
+/// Allow-list mapping from file extension to the MIME type we'll serve
+/// the clip with. We never trust the uploader's claimed Content-Type:
+/// otherwise someone could upload a `.html` and get same-origin XSS
+/// against every other authenticated user.
+fn audio_content_type(ext: &str) -> Option<&'static str> {
+    match ext {
+        "mp3" => Some("audio/mpeg"),
+        "m4a" | "mp4" => Some("audio/mp4"),
+        "wav" => Some("audio/wav"),
+        "flac" => Some("audio/flac"),
+        "ogg" | "oga" | "opus" => Some("audio/ogg"),
+        "aac" => Some("audio/aac"),
+        "webm" => Some("audio/webm"),
+        _ => None,
+    }
+}
+
 pub async fn upload(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
     mut multipart: Multipart,
 ) -> AppResult<Response> {
-    let mut file_bytes: Option<Vec<u8>> = None;
-    let mut original_filename: Option<String> = None;
-    let mut content_type: Option<String> = None;
+    // Find the "audio" field. We stream it straight to disk rather than
+    // buffering the whole file: a 10 MB upload would otherwise cost us
+    // 10 MB of resident memory per concurrent request.
+    while let Some(mut field) = multipart.next_field().await? {
+        if field.name() != Some("audio") {
+            continue;
+        }
+        let original_filename = field
+            .file_name()
+            .map(|s| s.to_string())
+            .ok_or_else(|| AppError::BadRequest("audio file must have a filename".into()))?;
 
-    while let Some(field) = multipart.next_field().await? {
-        if field.name() == Some("audio") {
-            original_filename = field.file_name().map(|s| s.to_string());
-            content_type = field.content_type().map(|s| s.to_string());
-            file_bytes = Some(field.bytes().await?.to_vec());
+        let ext = Path::new(&original_filename)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let content_type = audio_content_type(&ext).ok_or_else(|| {
+            AppError::BadRequest(format!(
+                "unsupported audio format: .{ext} (allowed: mp3, m4a, wav, flac, ogg, opus, aac, webm)"
+            ))
+        })?;
+
+        let storage_filename = format!("{}.{}", uuid::Uuid::new_v4(), ext);
+        let path = state.config.audio_dir.join(&storage_filename);
+
+        // Stream field → file with a hard byte cap. axum's
+        // DefaultBodyLimit on this route catches the request before we
+        // get here for the common case; the in-loop check is defence in
+        // depth and lets us return a specific message.
+        let size_bytes = match stream_field_to_file(&mut field, &path).await {
+            Ok(n) => n,
+            Err(e) => {
+                // Don't leave half-written turds in the audio dir.
+                let _ = tokio::fs::remove_file(&path).await;
+                return Err(e);
+            }
+        };
+
+        // lofty's Probe::read is sync and does file I/O; keep it off
+        // the runtime thread.
+        let path_for_probe = path.clone();
+        let recording_date = tokio::task::spawn_blocking(move || extract_recording_date(&path_for_probe))
+            .await
+            .ok()
+            .flatten();
+
+        let display_name_stem = Path::new(&original_filename)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&original_filename)
+            .to_string();
+
+        // Pick a name and insert. If two uploads race on the same name,
+        // the loser sees a UNIQUE violation on the index — catch that
+        // and try the next suffix instead of bubbling a 500.
+        match insert_with_unique_name(
+            &state.pool,
+            &display_name_stem,
+            &storage_filename,
+            &original_filename,
+            content_type,
+            size_bytes as i64,
+            user.id,
+            recording_date.as_deref(),
+        )
+        .await
+        {
+            Ok(()) => return Ok(Redirect::to("/").into_response()),
+            Err(e) => {
+                let _ = tokio::fs::remove_file(&path).await;
+                return Err(e);
+            }
         }
     }
 
-    let file_bytes =
-        file_bytes.ok_or_else(|| AppError::BadRequest("audio file is required".into()))?;
-    let original_filename = original_filename
-        .ok_or_else(|| AppError::BadRequest("audio file must have a filename".into()))?;
-    let content_type = content_type.unwrap_or_else(|| "application/octet-stream".into());
-
-    let ext = Path::new(&original_filename)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("bin")
-        .to_ascii_lowercase();
-    let storage_filename = format!("{}.{}", uuid::Uuid::new_v4(), ext);
-    let path = state.config.audio_dir.join(&storage_filename);
-    tokio::fs::write(&path, &file_bytes).await?;
-
-    let recording_date = extract_recording_date(&path);
-    let display_name_stem = Path::new(&original_filename)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(&original_filename);
-    let final_name = find_unique_name(&state.pool, display_name_stem).await?;
-
-    let size_bytes = file_bytes.len() as i64;
-    sqlx::query(
-        "INSERT INTO clips (name, storage_filename, original_filename, content_type,
-                            size_bytes, uploaded_by, recording_date)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&final_name)
-    .bind(&storage_filename)
-    .bind(&original_filename)
-    .bind(&content_type)
-    .bind(size_bytes)
-    .bind(user.id)
-    .bind(recording_date.as_deref())
-    .execute(&state.pool)
-    .await?;
-
-    Ok(Redirect::to("/").into_response())
+    Err(AppError::BadRequest("audio file is required".into()))
 }
 
-/// Walk " (2)", " (3)" suffixes until we find a name no clip is using.
-async fn find_unique_name(pool: &SqlitePool, base: &str) -> AppResult<String> {
+/// Stream a multipart field to disk, enforcing MAX_UPLOAD_BYTES as we
+/// go. Returns the total bytes written on success.
+async fn stream_field_to_file(
+    field: &mut axum::extract::multipart::Field<'_>,
+    path: &Path,
+) -> AppResult<usize> {
+    let mut file = tokio::fs::File::create(path).await?;
+    let mut total: usize = 0;
+    while let Some(chunk) = field.chunk().await? {
+        total = total.saturating_add(chunk.len());
+        if total > MAX_UPLOAD_BYTES {
+            return Err(AppError::BadRequest(format!(
+                "upload exceeds {MAX_UPLOAD_BYTES}-byte limit"
+            )));
+        }
+        file.write_all(&chunk).await?;
+    }
+    file.flush().await?;
+    Ok(total)
+}
+
+/// Try a sequence of names ("base", "base (2)", "base (3)", …) until
+/// the INSERT succeeds. Each loop iteration both picks a candidate and
+/// inserts; a UNIQUE-violation just means another upload claimed that
+/// name between our SELECT and INSERT, so we try the next one.
+#[allow(clippy::too_many_arguments)]
+async fn insert_with_unique_name(
+    pool: &SqlitePool,
+    base: &str,
+    storage_filename: &str,
+    original_filename: &str,
+    content_type: &str,
+    size_bytes: i64,
+    uploader_id: i64,
+    recording_date: Option<&str>,
+) -> AppResult<()> {
     let base = base.trim();
     let base = if base.is_empty() { "clip" } else { base };
-    let mut candidate = base.to_string();
-    let mut n: u32 = 2;
+    let mut n: u32 = 1;
     loop {
+        let candidate = if n == 1 { base.to_string() } else { format!("{base} ({n})") };
         let exists: Option<(i64,)> =
             sqlx::query_as("SELECT id FROM clips WHERE name = ? COLLATE NOCASE")
                 .bind(&candidate)
                 .fetch_optional(pool)
                 .await?;
-        if exists.is_none() {
-            return Ok(candidate);
+        if exists.is_some() {
+            n += 1;
+            if n > 1000 {
+                return Err(AppError::Other(anyhow::anyhow!(
+                    "couldn't find a unique name after 1000 tries"
+                )));
+            }
+            continue;
         }
-        candidate = format!("{base} ({n})");
-        n += 1;
-        if n > 1000 {
-            return Err(AppError::Other(anyhow::anyhow!(
-                "couldn't find a unique name after 1000 tries"
-            )));
+
+        let result = sqlx::query(
+            "INSERT INTO clips (name, storage_filename, original_filename, content_type,
+                                size_bytes, uploaded_by, recording_date)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&candidate)
+        .bind(storage_filename)
+        .bind(original_filename)
+        .bind(content_type)
+        .bind(size_bytes)
+        .bind(uploader_id)
+        .bind(recording_date)
+        .execute(pool)
+        .await;
+
+        match result {
+            Ok(_) => return Ok(()),
+            Err(sqlx::Error::Database(d)) if d.is_unique_violation() => {
+                // Either the name or the storage_filename collided.
+                // storage_filename is a UUID v4 so that's astronomically
+                // unlikely; assume it's the name and try the next.
+                n += 1;
+                if n > 1000 {
+                    return Err(AppError::Other(anyhow::anyhow!(
+                        "couldn't find a unique name after 1000 tries"
+                    )));
+                }
+                continue;
+            }
+            Err(e) => return Err(AppError::Sqlx(e)),
         }
     }
 }
@@ -498,30 +619,23 @@ pub async fn rename(
         return Err(AppError::BadRequest("name can't be empty".into()));
     }
 
-    // Enforce uniqueness explicitly so we can return a clean 409
-    // instead of a SQLite UNIQUE-violation error string.
-    let conflict: Option<(i64,)> =
-        sqlx::query_as("SELECT id FROM clips WHERE name = ? COLLATE NOCASE AND id != ?")
-            .bind(new_name)
-            .bind(id)
-            .fetch_optional(&state.pool)
-            .await?;
-    if conflict.is_some() {
-        return Ok((
-            StatusCode::CONFLICT,
-            format!("A clip named “{new_name}” already exists."),
-        )
-            .into_response());
-    }
-
+    // Let the UNIQUE index be the source of truth — no SELECT-then-
+    // UPDATE TOCTOU. Map a unique-violation back to a clean 409 for
+    // HTMX to display.
     let result = sqlx::query("UPDATE clips SET name = ? WHERE id = ?")
         .bind(new_name)
         .bind(id)
         .execute(&state.pool)
-        .await?;
-    if result.rows_affected() == 0 {
-        return Err(AppError::NotFound);
-    }
+        .await;
 
-    render(ClipHeader { clip_id: id, name: new_name.to_string() })
+    match result {
+        Ok(r) if r.rows_affected() == 0 => Err(AppError::NotFound),
+        Ok(_) => render(ClipHeader { clip_id: id, name: new_name.to_string() }),
+        Err(sqlx::Error::Database(d)) if d.is_unique_violation() => Ok((
+            StatusCode::CONFLICT,
+            format!("A clip named “{new_name}” already exists."),
+        )
+            .into_response()),
+        Err(e) => Err(AppError::Sqlx(e)),
+    }
 }

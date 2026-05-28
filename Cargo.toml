@@ -8,12 +8,13 @@ edition = "2021"
 axum = { version = "0.8", features = ["multipart", "macros"] }
 axum-extra = { version = "0.10", features = ["query"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["fs", "trace"] }
+tower-http = { version = "0.6", features = ["fs", "trace", "limit"] }
 tower-sessions = "0.14"
 tower-sessions-sqlx-store = { version = "0.15", features = ["sqlite"] }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
 
 # Templates
 askama = "0.13"

@@ -30,6 +30,9 @@ async fn start() -> Server {
         data_dir: data_dir.clone(),
         db_path: db_path.clone(),
         audio_dir,
+        // Tests speak plain HTTP to 127.0.0.1; the Secure flag would
+        // make reqwest's cookie store drop the session cookie.
+        secure_cookies: false,
     };
 
     let pool = iggybilly::db::connect(&db_path).await.unwrap();

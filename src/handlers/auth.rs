@@ -1,8 +1,8 @@
 use askama::Template;
 use axum::{
+    Form,
     extract::State,
     response::{IntoResponse, Redirect, Response},
-    Form,
 };
 use serde::Deserialize;
 use tower_sessions::Session;
@@ -43,13 +43,29 @@ pub async fn login(
     .fetch_optional(&state.pool)
     .await?;
 
-    let Some((id, username, hash, is_admin)) = row else {
-        return render(LoginPage { error: Some("Invalid username or password.") });
+    // Verify against a real (dummy) hash even when the user is missing,
+    // so wrong-password and unknown-username take the same wall-clock
+    // time. Without this an attacker can enumerate usernames by timing.
+    let (user_record, ok) = match row {
+        Some((id, username, hash, is_admin)) => {
+            let ok = auth::verify_password(&form.password, &hash);
+            (Some((id, username, is_admin)), ok)
+        }
+        None => {
+            let _ = auth::verify_password(&form.password, auth::dummy_hash());
+            (None, false)
+        }
     };
-    if !auth::verify_password(&form.password, &hash) {
+
+    if !ok {
+        auth::failed_login_penalty().await;
         return render(LoginPage { error: Some("Invalid username or password.") });
     }
+    let (id, username, is_admin) = user_record.expect("ok implies a user row");
 
+    // Rotate the session id on auth boundary so any pre-login session
+    // fixation attempt is invalidated.
+    session.cycle_id().await?;
     let user = SessionUser { id, username, is_admin: is_admin != 0 };
     session.insert(SESSION_USER_KEY, &user).await?;
     Ok(Redirect::to("/").into_response())

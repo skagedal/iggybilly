@@ -1,6 +1,7 @@
 use askama::Template;
 use axum::{Form, extract::State, response::Response};
 use serde::Deserialize;
+use tower_sessions::Session;
 
 use crate::{
     auth,
@@ -31,6 +32,7 @@ pub struct ChangeForm {
 pub async fn change_password(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
+    session: Session,
     Form(form): Form<ChangeForm>,
 ) -> AppResult<Response> {
     if form.new_password != form.new_password_confirm {
@@ -66,6 +68,11 @@ pub async fn change_password(
         .bind(user.id)
         .execute(&state.pool)
         .await?;
+
+    // Rotate the session id: if the user is changing their password
+    // because they fear compromise, the old cookie shouldn't keep
+    // working.
+    session.cycle_id().await?;
 
     render(AccountPage {
         username: user.username,

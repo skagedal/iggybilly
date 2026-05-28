@@ -119,7 +119,16 @@ pub async fn search(
     }
 
     let normalised = trimmed.to_lowercase();
-    let pattern = format!("%{}%", normalised.replace('%', "\\%"));
+    // Escape SQL LIKE metacharacters: `\` first (so we don't double-
+    // escape our own backslashes), then `%` and `_`. The query is sent
+    // with `ESCAPE '\'` so SQLite treats the prefixed chars as literal.
+    let pattern = format!(
+        "%{}%",
+        normalised
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    );
 
     let matches: Vec<(String,)> = if let Some(clip_id) = q.clip_id {
         sqlx::query_as(

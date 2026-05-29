@@ -22,6 +22,10 @@ RUN mkdir src && echo 'fn main(){}' > src/main.rs \
 
 COPY src ./src
 COPY migrations ./migrations
+# Askama compiles templates at build time (the #[template(path = ...)]
+# macro reads templates/ relative to the crate root), so they must be
+# present before `cargo build`, not just in the runtime stage.
+COPY templates ./templates
 RUN cargo build --release
 
 # UPGRADE_POINT

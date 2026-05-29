@@ -42,7 +42,7 @@
           <div class="clip-head">
             <a class="clip-name" href="/clips/{{ clip.id }}">{{ clip.name }}</a>
             <span class="meta">
-              {% if let Some(rec) = clip.recording_date %}Recorded {{ rec }} · {% endif %}
+              {% if let Some(rec) = clip.recording_date %}recorded {{ rec }} · {% endif %}
               uploaded by {{ clip.uploader }} on {{ clip.uploaded_at }}
             </span>
           </div>

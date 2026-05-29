@@ -50,6 +50,7 @@ whatever channel you'd send a password.
   SQLite DB and uploaded audio. Add it to the nixos tmpfiles config so
   it exists with the right ownership before the pod starts.
 - GitHub Actions secrets required on this repo: `DOCKERHUB_USERNAME`,
-  `DOCKERHUB_TOKEN`, `KUBECONFIG_BASE64` (base64 of a kubeconfig that
-  uses the `ci-deployer` ServiceAccount token from
-  `kubernetes/iggybilly/ci-rbac.yaml` in the skagedal.tech repo).
+  `DOCKERHUB_TOKEN`, `KUBECONFIG_BASE64`. The kubeconfig is the same
+  cluster-admin one used by skagedal.tech, blogdans, and bonband —
+  copy the value across repos rather than minting a new namespace-
+  scoped token.

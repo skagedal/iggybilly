@@ -542,9 +542,16 @@ async fn insert_with_unique_name(
 }
 
 pub(crate) fn extract_recording_date(path: &PathBuf) -> Option<String> {
-    // Prefer an explicit tag if the encoder wrote one; otherwise fall
-    // back to the MP4 container's mvhd creation time (see below).
-    recording_date_from_tag(path).or_else(|| recording_date_from_mvhd(path))
+    // In priority order:
+    //   1. an explicit recording-date tag (older iPhone Voice Memos),
+    //   2. the Voice Memos `moov/udta/date` box — the true recording
+    //      time, and it survives editing,
+    //   3. the mvhd creation time, as a rough last resort.
+    // mvhd is least trustworthy because cropping/editing re-exports the
+    // file and stamps mvhd with the *export* time, not the recording.
+    recording_date_from_tag(path)
+        .or_else(|| recording_date_from_udta_date(path))
+        .or_else(|| recording_date_from_mvhd(path))
 }
 
 fn recording_date_from_tag(path: &PathBuf) -> Option<String> {
@@ -567,14 +574,44 @@ fn recording_date_from_tag(path: &PathBuf) -> Option<String> {
     Some(iso_date_in_stockholm(raw))
 }
 
-/// Newer Voice Memos (iPad 26.x) drop the `©day` tag entirely; the only
-/// timestamp is the MP4 movie header's creation time. We read it by
-/// hand: descend `moov` → `mvhd` and pull the field. MP4 is a flat
-/// sequence of `[u32 size][4-byte type][payload]` boxes (size 1 means a
-/// 64-bit size follows; 0 means "to end of file"), and `moov` is a
-/// container whose children include `mvhd`. We touch only box headers
+/// Newer Voice Memos (iPad 26.x) drop the `©day` tag but store the
+/// recording time in a `moov/udta/date` box whose payload is a bare
+/// RFC 3339 string like `2026-05-22T19:40:08Z`. Crucially this survives
+/// editing — cropping a memo rewrites the mvhd creation time to the
+/// export moment but leaves this box intact — so it's the date we
+/// actually want. MP4 is a flat sequence of `[u32 size][4-byte type]
+/// [payload]` boxes, and `udta` here is a direct child of `moov`
+/// (the trak-level `udta` holding the transcript is nested inside `trak`,
+/// so scanning moov's direct children doesn't reach it).
+fn recording_date_from_udta_date(path: &PathBuf) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = std::fs::File::open(path).ok()?;
+    let file_len = file.metadata().ok()?.len();
+
+    let (moov_start, moov_end) = find_box(&mut file, b"moov", 0, file_len)?;
+    let (udta_start, udta_end) = find_box(&mut file, b"udta", moov_start, moov_end)?;
+    let (date_start, date_end) = find_box(&mut file, b"date", udta_start, udta_end)?;
+
+    // The `date` box has no version/flags — its payload is the string
+    // directly. Bound the length so a malformed box can't allocate wildly.
+    let len = date_end.checked_sub(date_start)?;
+    if len == 0 || len > 64 {
+        return None;
+    }
+    file.seek(SeekFrom::Start(date_start)).ok()?;
+    let mut buf = vec![0u8; len as usize];
+    file.read_exact(&mut buf).ok()?;
+
+    Some(iso_date_in_stockholm(std::str::from_utf8(&buf).ok()?.trim()))
+}
+
+/// Last-resort recording date: the MP4 movie header's creation time,
+/// read by hand by descending `moov` → `mvhd`. We touch only box headers
 /// and the ~20-byte mvhd payload, so the sample tables that trip up
-/// general-purpose parsers are never read.
+/// general-purpose parsers are never read. This is the *export* time for
+/// any file that's been edited, so it's only used when neither a tag nor
+/// a `udta/date` box is present.
 fn recording_date_from_mvhd(path: &PathBuf) -> Option<String> {
     use std::io::{Read, Seek, SeekFrom};
     use time::OffsetDateTime;
@@ -796,13 +833,15 @@ mod tests {
     use super::*;
 
     // guitar-clip.m4a is an iPad Voice Memos recording with no `©day`
-    // tag, so it exercises the mvhd-creation-time fallback specifically.
-    // Its mvhd creation time is 2026-05-29T19:46:11Z.
+    // tag. It was cropped after recording, so its mvhd creation time is
+    // the export date (2026-05-29T19:46:11Z) while the true recording
+    // time lives in the udta/date box (2026-05-22T19:40:08Z). We must
+    // report the recording date, not the edit date.
     #[test]
-    fn extracts_recording_date_from_mvhd() {
+    fn extracts_recording_date_from_udta_date() {
         let path =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/guitar-clip.m4a");
-        assert_eq!(extract_recording_date(&path).as_deref(), Some("2026-05-29"));
+        assert_eq!(extract_recording_date(&path).as_deref(), Some("2026-05-22"));
     }
 
     #[test]

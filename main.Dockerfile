@@ -2,7 +2,7 @@
 # Debian image with just the SQLite + TLS runtime libs we link against.
 
 # UPGRADE_POINT
-FROM rust:1.84-slim-bookworm AS build
+FROM rust:1.90-slim-bookworm AS build
 
 WORKDIR /build
 

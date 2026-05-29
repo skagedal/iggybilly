@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # source so cargo only recompiles iggybilly itself on source-only changes.
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir src && echo 'fn main(){}' > src/main.rs \
-    && cargo build --release \
+    && cargo build --locked --release \
     && rm -rf src target/release/deps/iggybilly* target/release/iggybilly*
 
 COPY src ./src
@@ -26,7 +26,7 @@ COPY migrations ./migrations
 # macro reads templates/ relative to the crate root), so they must be
 # present before `cargo build`, not just in the runtime stage.
 COPY templates ./templates
-RUN cargo build --release
+RUN cargo build --locked --release
 
 # UPGRADE_POINT
 FROM debian:bookworm-slim AS app

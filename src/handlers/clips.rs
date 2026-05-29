@@ -372,17 +372,22 @@ pub async fn upload(
     CurrentUser(user): CurrentUser,
     mut multipart: Multipart,
 ) -> AppResult<Response> {
-    // Find the "audio" field. We stream it straight to disk rather than
-    // buffering the whole file: a 10 MB upload would otherwise cost us
-    // 10 MB of resident memory per concurrent request.
+    // Each selected or dropped file arrives as its own "audio" multipart
+    // field. We stream each straight to disk rather than buffering: a
+    // batch of 10 MB files would otherwise cost that much resident memory
+    // per concurrent request.
+    let mut uploaded = 0usize;
     while let Some(mut field) = multipart.next_field().await? {
         if field.name() != Some("audio") {
             continue;
         }
-        let original_filename = field
-            .file_name()
-            .map(|s| s.to_string())
-            .ok_or_else(|| AppError::BadRequest("audio file must have a filename".into()))?;
+        // An empty file input still posts an "audio" part with no
+        // filename; skip it so submitting with nothing chosen (or a
+        // stray empty field) isn't a hard error.
+        let original_filename = match field.file_name() {
+            Some(name) if !name.is_empty() => name.to_string(),
+            _ => continue,
+        };
 
         let ext = Path::new(&original_filename)
             .extension()
@@ -428,7 +433,7 @@ pub async fn upload(
         // Pick a name and insert. If two uploads race on the same name,
         // the loser sees a UNIQUE violation on the index — catch that
         // and try the next suffix instead of bubbling a 500.
-        match insert_with_unique_name(
+        if let Err(e) = insert_with_unique_name(
             &state.pool,
             &display_name_stem,
             &storage_filename,
@@ -440,15 +445,16 @@ pub async fn upload(
         )
         .await
         {
-            Ok(()) => return Ok(Redirect::to("/").into_response()),
-            Err(e) => {
-                let _ = tokio::fs::remove_file(&path).await;
-                return Err(e);
-            }
+            let _ = tokio::fs::remove_file(&path).await;
+            return Err(e);
         }
+        uploaded += 1;
     }
 
-    Err(AppError::BadRequest("audio file is required".into()))
+    if uploaded == 0 {
+        return Err(AppError::BadRequest("at least one audio file is required".into()));
+    }
+    Ok(Redirect::to("/").into_response())
 }
 
 /// Stream a multipart field to disk, enforcing MAX_UPLOAD_BYTES as we

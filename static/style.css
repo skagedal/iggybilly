@@ -99,8 +99,22 @@ button:hover { filter: brightness(0.95); }
 .error { color: var(--error); }
 .success { color: var(--success); }
 
-.upload { display: flex; flex-wrap: wrap; gap: 1rem; align-items: end; }
-.upload label { margin-bottom: 0; flex: 1 1 220px; }
+.upload { display: block; }
+.dropzone {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: end;
+  padding: 1rem;
+  border: 2px dashed var(--border);
+  border-radius: 8px;
+  transition: border-color 0.15s, background 0.15s;
+}
+.dropzone.drag {
+  border-color: var(--accent);
+  background: #f0f7f3;
+}
+.dropzone label { margin-bottom: 0; flex: 1 1 220px; }
 .hint { color: var(--muted); font-size: 0.85rem; flex-basis: 100%; margin: 0.25rem 0 0; }
 
 .active-filters {

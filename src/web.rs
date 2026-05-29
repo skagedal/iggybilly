@@ -25,10 +25,17 @@ use crate::{
 
 pub const SESSION_USER_KEY: &str = "user";
 
-/// Hard cap on a single upload request, in bytes. Audio clips for a band
-/// app comfortably fit under this; anything larger is almost certainly
-/// not the file the user meant to upload.
+/// Hard cap on a single audio file, in bytes. Audio clips for a band app
+/// comfortably fit under this; anything larger is almost certainly not
+/// the file the user meant to upload. Enforced per file as we stream.
 pub const MAX_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
+
+/// Hard cap on the whole multipart upload request. A single POST can now
+/// carry several files (multi-select / drag-and-drop), so the request
+/// body limit is a generous multiple of the per-file cap. We still never
+/// buffer a whole file — each is streamed to disk — so this only bounds
+/// total bytes read, not memory.
+pub const MAX_UPLOAD_REQUEST_BYTES: usize = 100 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -76,7 +83,7 @@ pub async fn build_app(pool: SqlitePool, config: Arc<Config>) -> Result<Router> 
         .route("/", get(clips::list))
         .route(
             "/clips",
-            post(clips::upload).layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES)),
+            post(clips::upload).layer(DefaultBodyLimit::max(MAX_UPLOAD_REQUEST_BYTES)),
         )
         .route("/clips/{id}", get(clips::detail))
         .route("/clips/{id}/audio", get(clips::audio))

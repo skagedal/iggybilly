@@ -91,6 +91,21 @@ async fn upload_one(srv: &Server, c: &reqwest::Client, filename: &str) {
     assert_eq!(r.status(), 303);
 }
 
+/// Post several files in one request, each as its own "audio" part —
+/// exactly what the browser sends for a multi-select or drag-and-drop.
+async fn upload_many(srv: &Server, c: &reqwest::Client, filenames: &[&str]) {
+    let mut form = reqwest::multipart::Form::new();
+    for name in filenames {
+        let part = reqwest::multipart::Part::bytes(b"fake-audio-bytes".to_vec())
+            .file_name(name.to_string())
+            .mime_str("audio/mpeg")
+            .unwrap();
+        form = form.part("audio", part);
+    }
+    let r = c.post(format!("{}/clips", srv.base)).multipart(form).send().await.unwrap();
+    assert_eq!(r.status(), 303);
+}
+
 async fn add_label(srv: &Server, c: &reqwest::Client, clip_id: i64, name: &str) {
     let r = c
         .post(format!("{}/clips/{clip_id}/labels", srv.base))
@@ -152,6 +167,23 @@ async fn upload_derives_name_and_auto_suffixes_on_conflict() {
         sqlx::query_as("SELECT name FROM clips ORDER BY id").fetch_all(&srv.pool).await.unwrap();
     let names: Vec<&str> = rows.iter().map(|(n,)| n.as_str()).collect();
     assert_eq!(names, vec!["Rehearsal", "Rehearsal (2)", "Rehearsal (3)"]);
+}
+
+#[tokio::test]
+async fn upload_accepts_multiple_files_in_one_request() {
+    let srv = start().await;
+    create_user(&srv.pool, "alice", "pw").await;
+    let c = client();
+    login(&srv, &c, "alice", "pw").await;
+
+    // One POST carrying three files, including a name clash to confirm
+    // the per-file unique-name suffixing still applies within a batch.
+    upload_many(&srv, &c, &["Verse.mp3", "Chorus.mp3", "Verse.mp3"]).await;
+
+    let rows: Vec<(String,)> =
+        sqlx::query_as("SELECT name FROM clips ORDER BY id").fetch_all(&srv.pool).await.unwrap();
+    let names: Vec<&str> = rows.iter().map(|(n,)| n.as_str()).collect();
+    assert_eq!(names, vec!["Verse", "Chorus", "Verse (2)"]);
 }
 
 #[tokio::test]

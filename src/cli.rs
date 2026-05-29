@@ -22,6 +22,15 @@ pub enum Command {
     },
     /// Reset a user's password to a new random value, printed to stdout.
     ResetPassword { username: String },
+    /// Fill in recording_date for clips that don't have one yet, by
+    /// re-reading each stored audio file's metadata. Useful after the
+    /// extraction logic learns to read a new source (e.g. the mvhd
+    /// fallback) or for clips uploaded before it existed.
+    BackfillDates {
+        /// Show what would change without writing to the database.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 pub async fn run(cli: Cli) -> Result<()> {
@@ -61,5 +70,67 @@ pub async fn run(cli: Cli) -> Result<()> {
             println!("New password: {password}");
             Ok(())
         }
+        Command::BackfillDates { dry_run } => {
+            backfill_dates(&config, &pool, dry_run).await
+        }
     }
+}
+
+/// Re-derive `recording_date` for every clip that's currently missing
+/// one. Only touches NULL rows, so it's safe to re-run and never
+/// overwrites a date already on file.
+async fn backfill_dates(
+    config: &Config,
+    pool: &sqlx::SqlitePool,
+    dry_run: bool,
+) -> Result<()> {
+    let clips: Vec<(i64, String)> =
+        sqlx::query_as("SELECT id, storage_filename FROM clips WHERE recording_date IS NULL")
+            .fetch_all(pool)
+            .await
+            .context("listing clips without a recording date")?;
+
+    if clips.is_empty() {
+        println!("No clips are missing a recording date.");
+        return Ok(());
+    }
+
+    let (mut updated, mut not_found, mut no_date) = (0u32, 0u32, 0u32);
+    for (id, storage_filename) in &clips {
+        let path = config.audio_dir.join(storage_filename);
+        if !path.exists() {
+            eprintln!("clip {id}: audio file {storage_filename} is missing, skipping");
+            not_found += 1;
+            continue;
+        }
+
+        match crate::handlers::clips::extract_recording_date(&path) {
+            Some(date) => {
+                if dry_run {
+                    println!("clip {id}: would set recording_date = {date}");
+                } else {
+                    sqlx::query("UPDATE clips SET recording_date = ? WHERE id = ?")
+                        .bind(&date)
+                        .bind(id)
+                        .execute(pool)
+                        .await
+                        .with_context(|| format!("updating clip {id}"))?;
+                    println!("clip {id}: set recording_date = {date}");
+                }
+                updated += 1;
+            }
+            None => {
+                println!("clip {id}: no recording date found in metadata");
+                no_date += 1;
+            }
+        }
+    }
+
+    let verb = if dry_run { "would update" } else { "updated" };
+    println!(
+        "Done: {verb} {updated}, no date in {no_date}, {not_found} file(s) missing \
+         (of {} checked).",
+        clips.len()
+    );
+    Ok(())
 }

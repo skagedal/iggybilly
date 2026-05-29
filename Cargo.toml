@@ -41,13 +41,17 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
 
 # Time
-time = { version = "0.3", features = ["serde", "formatting", "macros"] }
+time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
 
 # Misc
 uuid = { version = "1", features = ["v4"] }
 
-# Audio metadata (pure Rust, no ffmpeg). Reads ID3v2 from mp3 and MP4
-# atoms from m4a — covers iPhone Voice Memos.
+# Audio metadata (pure Rust, no ffmpeg). lofty reads ID3v2 from mp3 and
+# the iTunes-style MP4 `ilst` tags from m4a. Newer Voice Memos (iPad
+# 26.x) no longer write the `©day` tag, so the recording time is only in
+# the MP4 `mvhd` header, which we parse directly (see clips.rs) — the
+# general-purpose mp4 crates either choke on these files or drop the
+# field.
 lofty = "0.24"
 
 [profile.release]

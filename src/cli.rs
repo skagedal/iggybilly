@@ -173,9 +173,9 @@ async fn backfill_waveforms(
             continue;
         }
 
-        match crate::waveform::compute(&path) {
+        match crate::audio::compute(&path) {
             Some(wf) => {
-                let peaks = crate::waveform::peaks_to_json(&wf.peaks);
+                let peaks = crate::audio::peaks_to_json(&wf.peaks);
                 if dry_run {
                     println!(
                         "clip {id}: would set waveform ({} peaks, {:.1}s)",

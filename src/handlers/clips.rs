@@ -449,13 +449,13 @@ pub async fn upload(
         let (recording_date, waveform) = tokio::task::spawn_blocking(move || {
             (
                 extract_recording_date(&path_for_probe),
-                crate::waveform::compute(&path_for_probe),
+                crate::audio::compute(&path_for_probe),
             )
         })
         .await
         .unwrap_or((None, None));
         let (peaks_json, duration_seconds) = match waveform {
-            Some(w) => (Some(crate::waveform::peaks_to_json(&w.peaks)), Some(w.duration_seconds)),
+            Some(w) => (Some(crate::audio::peaks_to_json(&w.peaks)), Some(w.duration_seconds)),
             None => (None, None),
         };
 
@@ -596,29 +596,11 @@ pub(crate) fn extract_recording_date(path: &PathBuf) -> Option<String> {
     //   3. the mvhd creation time, as a rough last resort.
     // mvhd is least trustworthy because cropping/editing re-exports the
     // file and stamps mvhd with the *export* time, not the recording.
-    recording_date_from_tag(path)
+    // The tag read (1) covers older iPhone Voice Memos, which write a
+    // `©day` atom; ID3-tagged mp3s etc. land here too.
+    crate::audio::recording_date_tag(path)
         .or_else(|| recording_date_from_udta_date(path))
         .or_else(|| recording_date_from_mvhd(path))
-}
-
-fn recording_date_from_tag(path: &PathBuf) -> Option<String> {
-    use lofty::file::TaggedFileExt;
-    use lofty::probe::Probe;
-    use lofty::tag::ItemKey;
-
-    let tagged = Probe::open(path).ok()?.read().ok()?;
-    let tag = tagged.primary_tag().or_else(|| tagged.first_tag())?;
-
-    // Older iPhone Voice Memos populate the M4A "©day" atom (lofty
-    // surfaces it as RecordingDate) with an ISO-8601 timestamp like
-    // 2024-03-15T14:30:00Z. ID3 TDRC is just a date or year. Fall back
-    // to Year if RecordingDate isn't there.
-    let raw = tag
-        .get_string(ItemKey::RecordingDate)
-        .or_else(|| tag.get_string(ItemKey::OriginalReleaseDate))
-        .or_else(|| tag.get_string(ItemKey::Year))?;
-
-    Some(crate::datefmt::iso_date_from_rfc3339(raw))
 }
 
 /// Newer Voice Memos (iPad 26.x) drop the `©day` tag but store the

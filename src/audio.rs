@@ -1,9 +1,11 @@
-//! Precompute waveform peak data from an audio file so the web UI can
-//! draw a waveform without downloading and decoding the audio in the
-//! browser. We decode (pure Rust, via symphonia), mix to mono, and
-//! reduce to a fixed-size array of normalised amplitude peaks plus the
-//! clip's duration. The result is stored per clip and handed to
-//! WaveSurfer's `peaks`/`duration` options.
+//! Symphonia-backed audio-file operations (pure Rust, no ffmpeg).
+//!
+//! Two things live here, both reading a clip's audio file:
+//!   - [`compute`] decodes the audio, mixes to mono, and reduces it to a
+//!     fixed-size array of normalised amplitude peaks plus the duration,
+//!     for WaveSurfer's `peaks`/`duration` options.
+//!   - [`recording_date_tag`] reads the recording-date metadata tag
+//!     (MP4 `©day`, ID3 `TDRC`/`TYER`, …) when one is present.
 
 use std::path::Path;
 
@@ -12,7 +14,7 @@ use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, TrackType};
 use symphonia::core::io::MediaSourceStream;
-use symphonia::core::meta::MetadataOptions;
+use symphonia::core::meta::{MetadataOptions, StandardTag, Tag};
 
 /// Number of peaks we reduce a clip down to. WaveSurfer interpolates to
 /// the container width, so this just needs to be finer than the widest
@@ -152,6 +154,64 @@ pub fn peaks_to_json(peaks: &[f32]) -> String {
     }
     s.push(']');
     s
+}
+
+/// Read a recording-date tag from the file's metadata, if present, as an
+/// ISO date in Stockholm time. Returns `None` when the container carries
+/// no date tag (e.g. newer Voice Memos, which only have it in the
+/// `udta/date` box / `mvhd` header — handled by the caller's fallbacks).
+pub fn recording_date_tag(path: &Path) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+
+    let mut format = symphonia::default::get_probe()
+        .probe(
+            &hint,
+            mss,
+            FormatOptions::default(),
+            MetadataOptions::default(),
+        )
+        .ok()?;
+
+    let mut metadata = format.metadata();
+    let revision = metadata.skip_to_latest()?;
+    let raw = pick_recording_date(&revision.media.tags)?;
+    Some(crate::datefmt::iso_date_from_rfc3339(&raw))
+}
+
+/// Choose the most recording-like date from a tag set. Symphonia maps
+/// each container's date tag to a `StandardTag` variant, but the naming
+/// differs by format — notably MP4's `©day` lands in `ReleaseDate`, not
+/// `RecordingDate` — so we check several in priority order and fall back
+/// to a bare year.
+fn pick_recording_date(tags: &[Tag]) -> Option<String> {
+    let mut recording = None;
+    let mut release = None;
+    let mut original = None;
+    let mut year = None;
+    for tag in tags {
+        match &tag.std {
+            Some(StandardTag::RecordingDate(s)) => recording.get_or_insert_with(|| s.to_string()),
+            Some(StandardTag::ReleaseDate(s)) => release.get_or_insert_with(|| s.to_string()),
+            Some(StandardTag::OriginalRecordingDate(s))
+            | Some(StandardTag::OriginalReleaseDate(s)) => {
+                original.get_or_insert_with(|| s.to_string())
+            }
+            Some(StandardTag::RecordingYear(y))
+            | Some(StandardTag::ReleaseYear(y))
+            | Some(StandardTag::OriginalRecordingYear(y))
+            | Some(StandardTag::OriginalReleaseYear(y)) => {
+                year.get_or_insert_with(|| y.to_string())
+            }
+            _ => continue,
+        };
+    }
+    recording.or(release).or(original).or(year)
 }
 
 #[cfg(test)]

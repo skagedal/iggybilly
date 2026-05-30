@@ -51,18 +51,13 @@ uuid = { version = "1", features = ["v4"] }
 # Rendered with unsafe_=false so raw HTML in user content is escaped.
 comrak = { version = "0.52", default-features = false }
 
-# Audio metadata (pure Rust, no ffmpeg). lofty reads ID3v2 from mp3 and
-# the iTunes-style MP4 `ilst` tags from m4a. Newer Voice Memos (iPad
-# 26.x) no longer write the `©day` tag, so the recording time is only in
-# the MP4 `mvhd` header, which we parse directly (see clips.rs) — the
-# general-purpose mp4 crates either choke on these files or drop the
-# field.
-lofty = "0.24"
-
-# Pure-Rust audio decoding, used to precompute waveform peaks at upload
-# time so the UI can draw waveforms without downloading the audio. The
-# default features cover flac/ogg/vorbis/wav/pcm; add the codecs/formats
-# for our other accepted types (mp3, and m4a/mp4 = isomp4 + aac/alac).
+# Pure-Rust audio (no ffmpeg). One library for all audio-file work:
+# decoding to compute waveform peaks, and reading metadata tags (e.g. the
+# recording date). default features cover flac/ogg/vorbis/wav/pcm; we add
+# the codecs/formats for our other accepted types (mp3, and m4a/mp4 =
+# isomp4 + aac/alac). Newer Voice Memos omit the date tag entirely, so
+# the recording time is parsed by hand from the MP4 udta/date box and
+# mvhd header (see handlers/clips.rs).
 symphonia = { version = "0.6", features = ["mp3", "aac", "isomp4", "alac"] }
 
 [profile.release]

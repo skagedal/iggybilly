@@ -29,6 +29,9 @@ pub struct ClipRow {
     pub recording_date: Option<String>,
     pub uploader: String,
     pub labels: Vec<LabelLink>,
+    /// Compact JSON peaks array for WaveSurfer, or None if not computed.
+    pub peaks: Option<String>,
+    pub duration_seconds: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -115,10 +118,11 @@ async fn load_clips(pool: &SqlitePool, active: &[&str]) -> AppResult<Vec<ClipRow
     // AND filter: a clip must have every label in `active`. Done with
     // GROUP BY HAVING COUNT(DISTINCT label_id) = N. The IN-list is
     // built with ? placeholders since sqlx doesn't expand Vec<_>.
-    let rows: Vec<(i64, String, String, String, Option<String>, String)> = if active.is_empty() {
+    type Row = (i64, String, String, String, Option<String>, String, Option<String>, Option<f64>);
+    let rows: Vec<Row> = if active.is_empty() {
         sqlx::query_as(
             "SELECT c.id, c.name, c.original_filename, c.uploaded_at,
-                    c.recording_date, u.username
+                    c.recording_date, u.username, c.peaks, c.duration_seconds
              FROM clips c JOIN users u ON u.id = c.uploaded_by
              ORDER BY c.uploaded_at DESC",
         )
@@ -128,7 +132,7 @@ async fn load_clips(pool: &SqlitePool, active: &[&str]) -> AppResult<Vec<ClipRow
         let placeholders = vec!["?"; active.len()].join(", ");
         let sql = format!(
             "SELECT c.id, c.name, c.original_filename, c.uploaded_at,
-                    c.recording_date, u.username
+                    c.recording_date, u.username, c.peaks, c.duration_seconds
              FROM clips c
              JOIN users u ON u.id = c.uploaded_by
              JOIN clip_labels cl ON cl.clip_id = c.id
@@ -147,7 +151,9 @@ async fn load_clips(pool: &SqlitePool, active: &[&str]) -> AppResult<Vec<ClipRow
     };
 
     let mut clips = Vec::with_capacity(rows.len());
-    for (id, name, original_filename, uploaded_at, recording_date, uploader) in rows {
+    for (id, name, original_filename, uploaded_at, recording_date, uploader, peaks, duration_seconds)
+        in rows
+    {
         let label_rows: Vec<(String,)> = sqlx::query_as(
             "SELECT l.name FROM labels l
              JOIN clip_labels cl ON cl.label_id = l.id
@@ -182,6 +188,8 @@ async fn load_clips(pool: &SqlitePool, active: &[&str]) -> AppResult<Vec<ClipRow
             recording_date,
             uploader,
             labels,
+            peaks,
+            duration_seconds,
         });
     }
     Ok(clips)
@@ -206,6 +214,8 @@ struct ClipPage {
     uploaded_at: String,
     recording_date: Option<String>,
     labels: Vec<ClipLabel>,
+    peaks: Option<String>,
+    duration_seconds: Option<f64>,
 }
 
 pub async fn detail(
@@ -213,19 +223,29 @@ pub async fn detail(
     CurrentUser(user): CurrentUser,
     AxumPath(id): AxumPath<i64>,
 ) -> AppResult<Response> {
-    let row: Option<(i64, String, String, String, String, Option<String>, String)> =
-        sqlx::query_as(
-            "SELECT c.id, c.name, c.original_filename, c.content_type,
-                    c.uploaded_at, c.recording_date, u.username
-             FROM clips c JOIN users u ON u.id = c.uploaded_by
-             WHERE c.id = ?",
-        )
-        .bind(id)
-        .fetch_optional(&state.pool)
-        .await?;
+    type DetailRow =
+        (i64, String, String, String, String, Option<String>, String, Option<String>, Option<f64>);
+    let row: Option<DetailRow> = sqlx::query_as(
+        "SELECT c.id, c.name, c.original_filename, c.content_type,
+                c.uploaded_at, c.recording_date, u.username, c.peaks, c.duration_seconds
+         FROM clips c JOIN users u ON u.id = c.uploaded_by
+         WHERE c.id = ?",
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await?;
 
-    let (clip_id, name, original_filename, content_type, uploaded_at, recording_date, uploader) =
-        row.ok_or(AppError::NotFound)?;
+    let (
+        clip_id,
+        name,
+        original_filename,
+        content_type,
+        uploaded_at,
+        recording_date,
+        uploader,
+        peaks,
+        duration_seconds,
+    ) = row.ok_or(AppError::NotFound)?;
 
     let labels = load_labels(&state, clip_id).await?;
 
@@ -239,6 +259,8 @@ pub async fn detail(
         uploaded_at: iso_date_in_stockholm(&uploaded_at),
         recording_date,
         labels,
+        peaks,
+        duration_seconds,
     })
 }
 
@@ -416,13 +438,22 @@ pub async fn upload(
             }
         };
 
-        // lofty's Probe::read is sync and does file I/O; keep it off
-        // the runtime thread.
+        // Metadata extraction and waveform decoding are sync, CPU/IO
+        // bound work on the just-written file; run both off the runtime
+        // thread in one hop.
         let path_for_probe = path.clone();
-        let recording_date = tokio::task::spawn_blocking(move || extract_recording_date(&path_for_probe))
-            .await
-            .ok()
-            .flatten();
+        let (recording_date, waveform) = tokio::task::spawn_blocking(move || {
+            (
+                extract_recording_date(&path_for_probe),
+                crate::waveform::compute(&path_for_probe),
+            )
+        })
+        .await
+        .unwrap_or((None, None));
+        let (peaks_json, duration_seconds) = match waveform {
+            Some(w) => (Some(crate::waveform::peaks_to_json(&w.peaks)), Some(w.duration_seconds)),
+            None => (None, None),
+        };
 
         let display_name_stem = Path::new(&original_filename)
             .file_stem()
@@ -442,6 +473,8 @@ pub async fn upload(
             size_bytes as i64,
             user.id,
             recording_date.as_deref(),
+            peaks_json.as_deref(),
+            duration_seconds,
         )
         .await
         {
@@ -492,6 +525,8 @@ async fn insert_with_unique_name(
     size_bytes: i64,
     uploader_id: i64,
     recording_date: Option<&str>,
+    peaks: Option<&str>,
+    duration_seconds: Option<f64>,
 ) -> AppResult<()> {
     let base = base.trim();
     let base = if base.is_empty() { "clip" } else { base };
@@ -515,8 +550,8 @@ async fn insert_with_unique_name(
 
         let result = sqlx::query(
             "INSERT INTO clips (name, storage_filename, original_filename, content_type,
-                                size_bytes, uploaded_by, recording_date)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                size_bytes, uploaded_by, recording_date, peaks, duration_seconds)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&candidate)
         .bind(storage_filename)
@@ -525,6 +560,8 @@ async fn insert_with_unique_name(
         .bind(size_bytes)
         .bind(uploader_id)
         .bind(recording_date)
+        .bind(peaks)
+        .bind(duration_seconds)
         .execute(pool)
         .await;
 

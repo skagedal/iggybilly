@@ -31,6 +31,14 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Compute and store waveform peaks for clips that don't have them
+    /// yet, so the UI can draw waveforms without downloading the audio.
+    /// Run this for clips uploaded before waveforms were precomputed.
+    BackfillWaveforms {
+        /// Show what would change without writing to the database.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 pub async fn run(cli: Cli) -> Result<()> {
@@ -72,6 +80,9 @@ pub async fn run(cli: Cli) -> Result<()> {
         }
         Command::BackfillDates { dry_run } => {
             backfill_dates(&config, &pool, dry_run).await
+        }
+        Command::BackfillWaveforms { dry_run } => {
+            backfill_waveforms(&config, &pool, dry_run).await
         }
     }
 }
@@ -129,6 +140,74 @@ async fn backfill_dates(
     let verb = if dry_run { "would update" } else { "updated" };
     println!(
         "Done: {verb} {updated}, no date in {no_date}, {not_found} file(s) missing \
+         (of {} checked).",
+        clips.len()
+    );
+    Ok(())
+}
+
+/// Compute and store waveform peaks for every clip that's currently
+/// missing them. Only touches NULL rows, so it's safe to re-run.
+async fn backfill_waveforms(
+    config: &Config,
+    pool: &sqlx::SqlitePool,
+    dry_run: bool,
+) -> Result<()> {
+    let clips: Vec<(i64, String)> =
+        sqlx::query_as("SELECT id, storage_filename FROM clips WHERE peaks IS NULL")
+            .fetch_all(pool)
+            .await
+            .context("listing clips without a waveform")?;
+
+    if clips.is_empty() {
+        println!("No clips are missing a waveform.");
+        return Ok(());
+    }
+
+    let (mut updated, mut not_found, mut undecodable) = (0u32, 0u32, 0u32);
+    for (id, storage_filename) in &clips {
+        let path = config.audio_dir.join(storage_filename);
+        if !path.exists() {
+            eprintln!("clip {id}: audio file {storage_filename} is missing, skipping");
+            not_found += 1;
+            continue;
+        }
+
+        match crate::waveform::compute(&path) {
+            Some(wf) => {
+                let peaks = crate::waveform::peaks_to_json(&wf.peaks);
+                if dry_run {
+                    println!(
+                        "clip {id}: would set waveform ({} peaks, {:.1}s)",
+                        wf.peaks.len(),
+                        wf.duration_seconds
+                    );
+                } else {
+                    sqlx::query("UPDATE clips SET peaks = ?, duration_seconds = ? WHERE id = ?")
+                        .bind(&peaks)
+                        .bind(wf.duration_seconds)
+                        .bind(id)
+                        .execute(pool)
+                        .await
+                        .with_context(|| format!("updating clip {id}"))?;
+                    println!(
+                        "clip {id}: set waveform ({} peaks, {:.1}s)",
+                        wf.peaks.len(),
+                        wf.duration_seconds
+                    );
+                }
+                updated += 1;
+            }
+            None => {
+                println!("clip {id}: could not decode audio for a waveform");
+                undecodable += 1;
+            }
+        }
+    }
+
+    let verb = if dry_run { "would update" } else { "updated" };
+    println!(
+        "Done: {verb} {updated}, undecodable {undecodable}, {not_found} file(s) missing \
          (of {} checked).",
         clips.len()
     );

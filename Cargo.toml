@@ -54,6 +54,12 @@ uuid = { version = "1", features = ["v4"] }
 # field.
 lofty = "0.24"
 
+# Pure-Rust audio decoding, used to precompute waveform peaks at upload
+# time so the UI can draw waveforms without downloading the audio. The
+# default features cover flac/ogg/vorbis/wav/pcm; add the codecs/formats
+# for our other accepted types (mp3, and m4a/mp4 = isomp4 + aac/alac).
+symphonia = { version = "0.6", features = ["mp3", "aac", "isomp4", "alac"] }
+
 [profile.release]
 strip = true
 lto = "thin"

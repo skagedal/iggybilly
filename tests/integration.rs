@@ -187,6 +187,95 @@ async fn upload_accepts_multiple_files_in_one_request() {
 }
 
 #[tokio::test]
+async fn label_wiki_saves_renders_history_and_restores() {
+    let srv = start().await;
+    create_user(&srv.pool, "alice", "pw").await;
+    let c = client();
+    login(&srv, &c, "alice", "pw").await;
+
+    upload_one(&srv, &c, "Song.mp3").await;
+    add_label(&srv, &c, 1, "verse").await;
+    let (label_id,): (i64,) = sqlx::query_as("SELECT id FROM labels WHERE name = 'verse'")
+        .fetch_one(&srv.pool)
+        .await
+        .unwrap();
+
+    // Save a wiki page; the <script> must be neutralised in the render.
+    let r = c
+        .post(format!("{}/labels/{label_id}/wiki", srv.base))
+        .form(&[("content", "# Verse\n\nLyrics **here** <script>alert(1)</script>")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let body = r.text().await.unwrap();
+    assert!(body.contains("<strong>here</strong>"), "markdown should render");
+    assert!(!body.contains("<script>"), "raw HTML must be stripped");
+
+    // The filtered clip list shows the rendered wiki above the clips.
+    let idx = c
+        .get(format!("{}/?label=verse", srv.base))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(idx.contains(r#"class="label-wiki""#));
+    assert!(idx.contains("<h1>Verse</h1>"));
+
+    // A second edit appends a revision rather than overwriting.
+    c.post(format!("{}/labels/{label_id}/wiki", srv.base))
+        .form(&[("content", "# Verse v2")])
+        .send()
+        .await
+        .unwrap();
+    let (count,): (i64,) =
+        sqlx::query_as("SELECT count(*) FROM label_wiki_revisions WHERE label_id = ?")
+            .bind(label_id)
+            .fetch_one(&srv.pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 2, "each save is a new revision");
+
+    // History lists revisions, with the newest marked current.
+    let hist = c
+        .get(format!("{}/labels/{label_id}/wiki/history", srv.base))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(hist.contains("Restore this version"));
+    assert!(hist.contains("rev-current"));
+
+    // Restoring the oldest revision appends it as a new (third) revision.
+    let (oldest,): (i64,) =
+        sqlx::query_as("SELECT min(id) FROM label_wiki_revisions WHERE label_id = ?")
+            .bind(label_id)
+            .fetch_one(&srv.pool)
+            .await
+            .unwrap();
+    let r = c
+        .post(format!("{}/labels/{label_id}/wiki/restore/{oldest}", srv.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 303, "restore redirects back to history");
+    let (count, latest): (i64, String) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM label_wiki_revisions WHERE label_id = ?1),
+                (SELECT content FROM label_wiki_revisions WHERE label_id = ?1 ORDER BY id DESC LIMIT 1)",
+    )
+    .bind(label_id)
+    .fetch_one(&srv.pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 3);
+    assert!(latest.starts_with("# Verse\n\nLyrics"), "restored content is now current");
+}
+
+#[tokio::test]
 async fn rename_succeeds_and_409s_on_conflict() {
     let srv = start().await;
     create_user(&srv.pool, "alice", "pw").await;

@@ -46,6 +46,11 @@ time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"
 # Misc
 uuid = { version = "1", features = ["v4"] }
 
+# Markdown rendering for label wiki pages. default-features=false drops
+# the CLI, syntect syntax highlighting, and bon builder we don't need.
+# Rendered with unsafe_=false so raw HTML in user content is escaped.
+comrak = { version = "0.52", default-features = false }
+
 # Audio metadata (pure Rust, no ffmpeg). lofty reads ID3v2 from mp3 and
 # the iTunes-style MP4 `ilst` tags from m4a. Newer Voice Memos (iPad
 # 26.x) no longer write the `©day` tag, so the recording time is only in

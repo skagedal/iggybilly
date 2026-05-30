@@ -35,6 +35,12 @@
     </div>
   {% endif %}
 
+  {% if !active_wikis.is_empty() %}
+    <div class="label-wikis">
+      {% for w in active_wikis %}{{ w|safe }}{% endfor %}
+    </div>
+  {% endif %}
+
   {% if clips.is_empty() %}
     <p>{% if active_filters.is_empty() %}No clips yet. Upload the first one above.{% else %}No clips match these labels.{% endif %}</p>
   {% else %}

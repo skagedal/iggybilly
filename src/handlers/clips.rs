@@ -74,6 +74,9 @@ struct IndexPage {
     username: String,
     clips: Vec<ClipRow>,
     active_filters: Vec<FilterChip>,
+    /// Pre-rendered wiki view partials, one per active filter label that
+    /// has a label row — shown above the clips.
+    active_wikis: Vec<String>,
 }
 
 pub async fn list(
@@ -95,6 +98,7 @@ pub async fn list(
 
     let active_strs: Vec<&str> = active.iter().map(|s| s.as_str()).collect();
     let clips = load_clips(&state.pool, &active_strs).await?;
+    let active_wikis = super::labels::active_wikis_html(&state, &active_strs).await?;
 
     // For each active filter, the X-button link drops just that one label.
     let active_filters: Vec<FilterChip> = active
@@ -111,7 +115,7 @@ pub async fn list(
         })
         .collect();
 
-    render(IndexPage { username: user.username, clips, active_filters })
+    render(IndexPage { username: user.username, clips, active_filters, active_wikis })
 }
 
 async fn load_clips(pool: &SqlitePool, active: &[&str]) -> AppResult<Vec<ClipRow>> {
@@ -184,7 +188,7 @@ async fn load_clips(pool: &SqlitePool, active: &[&str]) -> AppResult<Vec<ClipRow
             id,
             name,
             original_filename,
-            uploaded_at: iso_date_in_stockholm(&uploaded_at),
+            uploaded_at: crate::datefmt::iso_date_from_rfc3339(&uploaded_at),
             recording_date,
             uploader,
             labels,
@@ -256,7 +260,7 @@ pub async fn detail(
         original_filename,
         content_type,
         uploader,
-        uploaded_at: iso_date_in_stockholm(&uploaded_at),
+        uploaded_at: crate::datefmt::iso_date_from_rfc3339(&uploaded_at),
         recording_date,
         labels,
         peaks,
@@ -614,7 +618,7 @@ fn recording_date_from_tag(path: &PathBuf) -> Option<String> {
         .or_else(|| tag.get_string(ItemKey::OriginalReleaseDate))
         .or_else(|| tag.get_string(ItemKey::Year))?;
 
-    Some(iso_date_in_stockholm(raw))
+    Some(crate::datefmt::iso_date_from_rfc3339(raw))
 }
 
 /// Newer Voice Memos (iPad 26.x) drop the `©day` tag but store the
@@ -646,7 +650,7 @@ fn recording_date_from_udta_date(path: &PathBuf) -> Option<String> {
     let mut buf = vec![0u8; len as usize];
     file.read_exact(&mut buf).ok()?;
 
-    Some(iso_date_in_stockholm(std::str::from_utf8(&buf).ok()?.trim()))
+    Some(crate::datefmt::iso_date_from_rfc3339(std::str::from_utf8(&buf).ok()?.trim()))
 }
 
 /// Last-resort recording date: the MP4 movie header's creation time,
@@ -688,66 +692,7 @@ fn recording_date_from_mvhd(path: &PathBuf) -> Option<String> {
         return None;
     }
     let unix = (creation as i64).checked_sub(MP4_EPOCH_TO_UNIX)?;
-    stockholm_date(OffsetDateTime::from_unix_timestamp(unix).ok()?)
-}
-
-/// Format a stored UTC timestamp (e.g. the RFC 3339 `uploaded_at`, or a
-/// tag's recording timestamp) as the plain ISO date — "2026-05-26" — it
-/// fell on in Stockholm. Anything that doesn't parse as RFC 3339 (a bare
-/// date or year from an ID3 tag) is passed through by its date part.
-fn iso_date_in_stockholm(raw: &str) -> String {
-    use time::OffsetDateTime;
-    use time::format_description::well_known::Rfc3339;
-
-    OffsetDateTime::parse(raw, &Rfc3339)
-        .ok()
-        .and_then(stockholm_date)
-        .unwrap_or_else(|| raw.split('T').next().unwrap_or(raw).to_string())
-}
-
-/// The civil date in Stockholm for a UTC instant, as ISO "YYYY-MM-DD".
-/// Stockholm is CET (UTC+1) in winter and CEST (UTC+2) in summer; rather
-/// than pull in a full tz database we apply the EU rule directly — see
-/// [`stockholm_offset`].
-fn stockholm_date(utc: time::OffsetDateTime) -> Option<String> {
-    use time::macros::format_description;
-
-    utc.to_offset(stockholm_offset(utc))
-        .date()
-        .format(format_description!("[year]-[month]-[day]"))
-        .ok()
-}
-
-/// Stockholm's UTC offset at a given instant under the EU DST rule:
-/// CEST (+02:00) from 01:00 UTC on the last Sunday of March until 01:00
-/// UTC on the last Sunday of October, CET (+01:00) otherwise.
-fn stockholm_offset(utc: time::OffsetDateTime) -> time::UtcOffset {
-    use time::{Month, Time, UtcOffset};
-
-    let cet = UtcOffset::from_hms(1, 0, 0).expect("valid offset");
-    let cest = UtcOffset::from_hms(2, 0, 0).expect("valid offset");
-
-    let at_0100_utc = |month| {
-        last_sunday(utc.year(), month)
-            .with_time(Time::from_hms(1, 0, 0).expect("valid time"))
-            .assume_utc()
-    };
-    let dst_start = at_0100_utc(Month::March);
-    let dst_end = at_0100_utc(Month::October);
-
-    if utc >= dst_start && utc < dst_end { cest } else { cet }
-}
-
-/// The last Sunday of `month` in `year`. Only called for March and
-/// October, both of which always have 31 days.
-fn last_sunday(year: i32, month: time::Month) -> time::Date {
-    use time::{Date, Weekday};
-
-    let mut day = Date::from_calendar_date(year, month, 31).expect("31 is valid for Mar/Oct");
-    while day.weekday() != Weekday::Sunday {
-        day = day.previous_day().expect("a day before the 31st exists");
-    }
-    day
+    crate::datefmt::iso_date(OffsetDateTime::from_unix_timestamp(unix).ok()?)
 }
 
 /// Scan the boxes in `[start, end)` and return the `(payload_start,
@@ -885,34 +830,5 @@ mod tests {
         let path =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/guitar-clip.m4a");
         assert_eq!(extract_recording_date(&path).as_deref(), Some("2026-05-22"));
-    }
-
-    #[test]
-    fn iso_date_uses_stockholm_time() {
-        // Summer (CEST, +02:00): 22:30 UTC is already past midnight in
-        // Stockholm, so the date rolls forward. With a naive +01:00 it
-        // would still read the 1st — this pins the DST offset.
-        assert_eq!(iso_date_in_stockholm("2026-08-01T22:30:00.000Z"), "2026-08-02");
-        // Winter (CET, +01:00): 22:30 UTC is 23:30 in Stockholm, same day.
-        assert_eq!(iso_date_in_stockholm("2026-02-01T22:30:00.000Z"), "2026-02-01");
-    }
-
-    #[test]
-    fn iso_date_handles_dst_transition_boundaries() {
-        // DST 2026 runs [2026-03-29 01:00 UTC, 2026-10-25 01:00 UTC).
-        // Just inside the autumn end it's still CEST (+02:00): 23:30 UTC
-        // on the 24th is 01:30 on the 25th locally.
-        assert_eq!(iso_date_in_stockholm("2026-10-24T23:30:00.000Z"), "2026-10-25");
-        // Just after the switch back to CET (+01:00): 23:30 UTC on the
-        // 25th is 00:30 on the 26th locally.
-        assert_eq!(iso_date_in_stockholm("2026-10-25T23:30:00.000Z"), "2026-10-26");
-    }
-
-    #[test]
-    fn iso_date_passes_through_non_rfc3339() {
-        // Bare year/date from an ID3 tag isn't a full timestamp; keep the
-        // date part rather than dropping it.
-        assert_eq!(iso_date_in_stockholm("2024"), "2024");
-        assert_eq!(iso_date_in_stockholm("2024-03-15"), "2024-03-15");
     }
 }

@@ -33,6 +33,14 @@ impl IntoResponse for AppError {
             AppError::NotFound => (StatusCode::NOT_FOUND, "not found".into()),
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".into()),
             AppError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
+            AppError::Multipart(e) => {
+                // A malformed or interrupted multipart body is a client
+                // problem (e.g. a flaky mobile upload), not a server
+                // fault — return 400, but log it so failed uploads are
+                // visible rather than a silent error.
+                tracing::warn!(error = ?e, "rejected multipart upload");
+                (StatusCode::BAD_REQUEST, "could not read the uploaded form data".into())
+            }
             _ => {
                 tracing::error!(error = ?self, "internal error");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".into())

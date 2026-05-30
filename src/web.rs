@@ -10,7 +10,12 @@ use axum::{
 };
 use sqlx::SqlitePool;
 use tokio::net::TcpListener;
-use tower_http::{services::ServeDir, trace::TraceLayer};
+use tower_http::{
+    LatencyUnit,
+    services::ServeDir,
+    trace::{DefaultOnRequest, DefaultOnResponse, TraceLayer},
+};
+use tracing::Level;
 use tower_sessions::{
     Expiry, ExpiredDeletion, Session, SessionManagerLayer, cookie::SameSite,
 };
@@ -99,7 +104,26 @@ pub async fn build_app(pool: SqlitePool, config: Arc<Config>) -> Result<Router> 
         .route("/healthz", get(healthz))
         .nest_service("/static", ServeDir::new("static"))
         .layer(session_layer)
-        .layer(TraceLayer::new_for_http())
+        // Log each request and its response (method, path, status,
+        // latency) at INFO. The span carries method/path, so any
+        // tracing event emitted while handling the request — including
+        // the 500 error log in AppError — is tagged with them.
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(|req: &axum::extract::Request| {
+                    tracing::info_span!(
+                        "request",
+                        method = %req.method(),
+                        path = %req.uri().path(),
+                    )
+                })
+                .on_request(DefaultOnRequest::new().level(Level::INFO))
+                .on_response(
+                    DefaultOnResponse::new()
+                        .level(Level::INFO)
+                        .latency_unit(LatencyUnit::Millis),
+                ),
+        )
         .with_state(state))
 }
 

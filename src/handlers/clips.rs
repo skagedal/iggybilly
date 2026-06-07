@@ -402,7 +402,7 @@ pub async fn upload(
     // field. We stream each straight to disk rather than buffering: a
     // batch of 10 MB files would otherwise cost that much resident memory
     // per concurrent request.
-    let mut uploaded = 0usize;
+    let mut uploaded: Vec<(i64, String)> = Vec::new();
     while let Some(mut field) = multipart.next_field().await? {
         if field.name() != Some("audio") {
             continue;
@@ -468,7 +468,7 @@ pub async fn upload(
         // Pick a name and insert. If two uploads race on the same name,
         // the loser sees a UNIQUE violation on the index — catch that
         // and try the next suffix instead of bubbling a 500.
-        if let Err(e) = insert_with_unique_name(
+        match insert_with_unique_name(
             &state.pool,
             &display_name_stem,
             &storage_filename,
@@ -482,15 +482,19 @@ pub async fn upload(
         )
         .await
         {
-            let _ = tokio::fs::remove_file(&path).await;
-            return Err(e);
+            Ok(clip) => uploaded.push(clip),
+            Err(e) => {
+                let _ = tokio::fs::remove_file(&path).await;
+                return Err(e);
+            }
         }
-        uploaded += 1;
     }
 
-    if uploaded == 0 {
+    if uploaded.is_empty() {
         return Err(AppError::BadRequest("at least one audio file is required".into()));
     }
+    // One Discord post for the whole batch, fire-and-forget.
+    state.discord.clips_uploaded(&user.username, &uploaded);
     Ok(Redirect::to("/").into_response())
 }
 
@@ -518,7 +522,8 @@ async fn stream_field_to_file(
 /// Try a sequence of names ("base", "base (2)", "base (3)", …) until
 /// the INSERT succeeds. Each loop iteration both picks a candidate and
 /// inserts; a UNIQUE-violation just means another upload claimed that
-/// name between our SELECT and INSERT, so we try the next one.
+/// name between our SELECT and INSERT, so we try the next one. Returns the
+/// new clip's id and the name it actually landed on.
 #[allow(clippy::too_many_arguments)]
 async fn insert_with_unique_name(
     pool: &SqlitePool,
@@ -531,7 +536,7 @@ async fn insert_with_unique_name(
     recording_date: Option<&str>,
     peaks: Option<&str>,
     duration_seconds: Option<f64>,
-) -> AppResult<()> {
+) -> AppResult<(i64, String)> {
     let base = base.trim();
     let base = if base.is_empty() { "clip" } else { base };
     let mut n: u32 = 1;
@@ -570,7 +575,7 @@ async fn insert_with_unique_name(
         .await;
 
         match result {
-            Ok(_) => return Ok(()),
+            Ok(r) => return Ok((r.last_insert_rowid(), candidate)),
             Err(sqlx::Error::Database(d)) if d.is_unique_violation() => {
                 // Either the name or the storage_filename collided.
                 // storage_filename is a UUID v4 so that's astronomically

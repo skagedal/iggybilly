@@ -31,6 +31,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_urlencoded = "0.7"
 
+# HTTP client for posting Discord webhook notifications. default-features
+# off + rustls keeps us off OpenSSL; "json" gives us the typed body
+# helper. reqwest is already a dev-dependency (the test client), so this
+# adds no new transitive tree — only promotes it into the release build.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
 # Errors / logging
 anyhow = "1"
 thiserror = "1"

@@ -23,6 +23,7 @@ use tower_sessions_sqlx_store::SqliteStore;
 
 use crate::{
     config::Config,
+    discord::Discord,
     error::AppError,
     handlers::{account, auth as auth_handlers, clips, labels},
     models::SessionUser,
@@ -46,6 +47,9 @@ pub const MAX_UPLOAD_REQUEST_BYTES: usize = 100 * 1024 * 1024;
 pub struct AppState {
     pub pool: SqlitePool,
     pub config: Arc<Config>,
+    /// Posts clip-upload and wiki-edit notifications to Discord. Disabled
+    /// (a no-op) when no webhook URL is configured.
+    pub discord: Discord,
 }
 
 pub async fn serve(config: Config, pool: SqlitePool) -> Result<()> {
@@ -82,7 +86,9 @@ pub async fn build_app(pool: SqlitePool, config: Arc<Config>) -> Result<Router> 
         .with_same_site(SameSite::Strict)
         .with_expiry(Expiry::OnInactivity(time::Duration::days(30)));
 
-    let state = AppState { pool, config };
+    let discord =
+        Discord::new(config.discord_webhook_url.clone(), config.base_url.clone());
+    let state = AppState { pool, config, discord };
 
     Ok(Router::new()
         .route("/", get(clips::list))

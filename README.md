@@ -30,6 +30,17 @@ Environment:
 - `IGGYBILLY_DATA_DIR` — where the SQLite DB and audio files live
   (default `./data`).
 - `IGGYBILLY_LISTEN_ADDR` — `host:port` to bind (default `0.0.0.0:9020`).
+- `IGGYBILLY_DISCORD_WEBHOOK_URL` — a Discord [incoming webhook][webhook]
+  URL. When set, a message is posted to that channel whenever a clip is
+  uploaded or a label's wiki page is edited. Unset (the default) disables
+  the notifications entirely. Posts are fire-and-forget: a Discord outage
+  never blocks or fails an upload or edit, it's just logged.
+- `IGGYBILLY_BASE_URL` — the public origin the app is served from, e.g.
+  `https://iggybilly.skagedal.tech`. Used only to turn clips and labels
+  into clickable links in the Discord posts; without it the posts carry
+  plain names.
+
+[webhook]: https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks
 
 ## Admin
 

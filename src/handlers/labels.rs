@@ -396,6 +396,7 @@ pub async fn wiki_save(
         )));
     }
     insert_revision(&state, label_id, &form.content, user.id).await?;
+    state.discord.wiki_edited(&user.username, &name);
     render(load_wiki_view(&state, label_id, &name).await?)
 }
 
@@ -455,6 +456,8 @@ pub async fn wiki_restore(
     let content = content.map(|(c,)| c).ok_or(AppError::NotFound)?;
 
     insert_revision(&state, label_id, &content, user.id).await?;
+    let name = label_name(&state, label_id).await?;
+    state.discord.wiki_edited(&user.username, &name);
     Ok(Redirect::to(&format!("/labels/{label_id}/wiki/history")).into_response())
 }
 

@@ -9,6 +9,7 @@ pub mod cli;
 pub mod config;
 pub mod datefmt;
 pub mod db;
+pub mod discord;
 pub mod error;
 pub mod handlers;
 pub mod markdown;

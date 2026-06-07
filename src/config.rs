@@ -10,6 +10,15 @@ pub struct Config {
     /// misconfigured prod deploy fails closed; tests flip it off because
     /// they speak plain HTTP to 127.0.0.1.
     pub secure_cookies: bool,
+    /// Discord incoming-webhook URL. When `None`, clip-upload and
+    /// wiki-edit notifications are silently skipped — so local dev and
+    /// tests need no Discord setup.
+    pub discord_webhook_url: Option<String>,
+    /// Public origin the app is served from, e.g.
+    /// `https://iggybilly.skagedal.tech`, with no trailing slash. Used to
+    /// turn clips and labels into clickable links in Discord posts. When
+    /// `None`, posts carry plain names instead of links.
+    pub base_url: Option<String>,
 }
 
 impl Config {
@@ -24,6 +33,26 @@ impl Config {
         let secure_cookies = std::env::var("IGGYBILLY_SECURE_COOKIES")
             .map(|v| !matches!(v.as_str(), "0" | "false" | "no"))
             .unwrap_or(true);
-        Self { listen_addr, data_dir, db_path, audio_dir, secure_cookies }
+        let discord_webhook_url = non_empty_env("IGGYBILLY_DISCORD_WEBHOOK_URL");
+        // Trim a trailing slash so we can build `${base}/clips/1` without
+        // risking a double slash.
+        let base_url = non_empty_env("IGGYBILLY_BASE_URL")
+            .map(|u| u.trim_end_matches('/').to_string());
+        Self {
+            listen_addr,
+            data_dir,
+            db_path,
+            audio_dir,
+            secure_cookies,
+            discord_webhook_url,
+            base_url,
+        }
     }
+}
+
+/// Read an env var, treating unset and empty/whitespace-only the same
+/// (both yield `None`) so an env var set to "" disables the feature
+/// rather than producing a useless empty URL.
+fn non_empty_env(key: &str) -> Option<String> {
+    std::env::var(key).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
 }

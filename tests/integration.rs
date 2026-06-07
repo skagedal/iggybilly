@@ -18,6 +18,12 @@ struct Server {
 }
 
 async fn start() -> Server {
+    start_with(None, None).await
+}
+
+/// Like `start`, but lets a test wire up the Discord notifier with a
+/// webhook URL (e.g. a `mock_webhook` receiver) and a public base URL.
+async fn start_with(discord_webhook_url: Option<String>, base_url: Option<String>) -> Server {
     // Each test gets its own tempdir + DB + port → no shared state.
     let temp = tempfile::tempdir().expect("tempdir");
     let data_dir = temp.path().to_path_buf();
@@ -33,6 +39,8 @@ async fn start() -> Server {
         // Tests speak plain HTTP to 127.0.0.1; the Secure flag would
         // make reqwest's cookie store drop the session cookie.
         secure_cookies: false,
+        discord_webhook_url,
+        base_url,
     };
 
     let pool = iggybilly::db::connect(&db_path).await.unwrap();
@@ -510,4 +518,90 @@ async fn change_password_updates_credentials() {
         .await
         .unwrap();
     assert_eq!(r.status(), 303, "new password should authenticate");
+}
+
+/// Spin up a throwaway HTTP server that captures the JSON body of every
+/// POST it receives and forwards it down a channel. Stands in for a
+/// Discord webhook endpoint so we can assert on what the app would post.
+async fn mock_webhook() -> (String, tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>) {
+    use axum::{Router, routing::post};
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let app = Router::new().route(
+        "/webhook",
+        post(move |body: axum::Json<serde_json::Value>| {
+            let tx = tx.clone();
+            async move {
+                let _ = tx.send(body.0);
+                axum::http::StatusCode::NO_CONTENT
+            }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (format!("http://{addr}/webhook"), rx)
+}
+
+/// Wait for the next captured webhook post, failing the test if none
+/// arrives — the send is fire-and-forget on a spawned task, so we can't
+/// just check synchronously after the request returns.
+async fn next_post(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+) -> serde_json::Value {
+    tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+        .await
+        .expect("a webhook post within 5s")
+        .expect("webhook channel open")
+}
+
+#[tokio::test]
+async fn uploading_clips_posts_to_discord() {
+    let (webhook, mut rx) = mock_webhook().await;
+    let srv = start_with(Some(webhook), Some("https://iggybilly.test".into())).await;
+    create_user(&srv.pool, "alice", "pw").await;
+    let c = client();
+    login(&srv, &c, "alice", "pw").await;
+
+    // A single upload: one post, naming the clip and linking it.
+    upload_one(&srv, &c, "Riff.mp3").await;
+    let content = next_post(&mut rx).await["content"].as_str().unwrap().to_string();
+    assert!(content.contains("alice"), "names the uploader: {content}");
+    assert!(content.contains("[Riff](https://iggybilly.test/clips/1)"), "links the clip: {content}");
+
+    // A batch upload: a single post listing both clips, not one each.
+    upload_many(&srv, &c, &["Verse.mp3", "Chorus.mp3"]).await;
+    let content = next_post(&mut rx).await["content"].as_str().unwrap().to_string();
+    assert!(content.contains("2 clips"), "summarises the batch: {content}");
+    assert!(content.contains("Verse") && content.contains("Chorus"), "lists both: {content}");
+}
+
+#[tokio::test]
+async fn editing_a_wiki_posts_to_discord() {
+    let (webhook, mut rx) = mock_webhook().await;
+    let srv = start_with(Some(webhook), Some("https://iggybilly.test".into())).await;
+    create_user(&srv.pool, "alice", "pw").await;
+    let c = client();
+    login(&srv, &c, "alice", "pw").await;
+
+    upload_one(&srv, &c, "Song.mp3").await;
+    next_post(&mut rx).await; // drain the upload notification
+    add_label(&srv, &c, 1, "verse").await;
+    let (label_id,): (i64,) = sqlx::query_as("SELECT id FROM labels WHERE name = 'verse'")
+        .fetch_one(&srv.pool)
+        .await
+        .unwrap();
+
+    c.post(format!("{}/labels/{label_id}/wiki", srv.base))
+        .form(&[("content", "# Verse")])
+        .send()
+        .await
+        .unwrap();
+
+    let content = next_post(&mut rx).await["content"].as_str().unwrap().to_string();
+    assert!(content.contains("alice"), "names the editor: {content}");
+    assert!(content.contains("verse"), "names the label: {content}");
+    assert!(content.contains("?label=verse"), "links the wiki view: {content}");
 }

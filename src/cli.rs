@@ -22,18 +22,15 @@ pub enum Command {
     },
     /// Reset a user's password to a new random value, printed to stdout.
     ResetPassword { username: String },
-    /// Fill in recording_date for clips that don't have one yet, by
-    /// re-reading each stored audio file's metadata. Useful after the
-    /// extraction logic learns to read a new source (e.g. the mvhd
-    /// fallback) or for clips uploaded before it existed.
+    /// List all users.
+    ListUsers,
+    /// Backfill recording_date for clips that don't have one yet.
     BackfillDates {
         /// Show what would change without writing to the database.
         #[arg(long)]
         dry_run: bool,
     },
-    /// Compute and store waveform peaks for clips that don't have them
-    /// yet, so the UI can draw waveforms without downloading the audio.
-    /// Run this for clips uploaded before waveforms were precomputed.
+    /// Backfill waveform peaks for clips that don't have them yet.
     BackfillWaveforms {
         /// Show what would change without writing to the database.
         #[arg(long)]
@@ -78,6 +75,7 @@ pub async fn run(cli: Cli) -> Result<()> {
             println!("New password: {password}");
             Ok(())
         }
+        Command::ListUsers => list_users(&pool).await,
         Command::BackfillDates { dry_run } => {
             backfill_dates(&config, &pool, dry_run).await
         }
@@ -85,6 +83,27 @@ pub async fn run(cli: Cli) -> Result<()> {
             backfill_waveforms(&config, &pool, dry_run).await
         }
     }
+}
+
+/// List every user, one per line, with their admin flag and creation time.
+async fn list_users(pool: &sqlx::SqlitePool) -> Result<()> {
+    let users: Vec<(i64, String, i64, String)> = sqlx::query_as(
+        "SELECT id, username, is_admin, created_at FROM users ORDER BY username COLLATE NOCASE",
+    )
+    .fetch_all(pool)
+    .await
+    .context("listing users")?;
+
+    if users.is_empty() {
+        println!("No users.");
+        return Ok(());
+    }
+
+    for (id, username, is_admin, created_at) in &users {
+        let admin = if *is_admin != 0 { " (admin)" } else { "" };
+        println!("{id}\t{username}{admin}\tcreated {created_at}");
+    }
+    Ok(())
 }
 
 /// Re-derive `recording_date` for every clip that's currently missing

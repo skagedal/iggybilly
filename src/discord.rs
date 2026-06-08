@@ -39,7 +39,11 @@ impl Discord {
     /// disabled notifier.
     pub fn new(webhook_url: Option<String>, base_url: Option<String>) -> Self {
         let inner = webhook_url.map(|webhook_url| {
-            Arc::new(Inner { webhook_url, base_url, client: reqwest::Client::new() })
+            Arc::new(Inner {
+                webhook_url,
+                base_url,
+                client: reqwest::Client::new(),
+            })
         });
         Self { inner }
     }
@@ -86,10 +90,17 @@ impl Inner {
 
     fn upload_message(&self, uploader: &str, clips: &[(i64, String)]) -> String {
         if let [(id, name)] = clips {
-            format!("🎵 **{}** uploaded a clip: {}", md_escape(uploader), self.clip_link(*id, name))
+            format!(
+                "🎵 **{}** uploaded a clip: {}",
+                md_escape(uploader),
+                self.clip_link(*id, name)
+            )
         } else {
-            let mut msg =
-                format!("🎵 **{}** uploaded {} clips:", md_escape(uploader), clips.len());
+            let mut msg = format!(
+                "🎵 **{}** uploaded {} clips:",
+                md_escape(uploader),
+                clips.len()
+            );
             for (id, name) in clips {
                 msg.push_str("\n• ");
                 msg.push_str(&self.clip_link(*id, name));
@@ -106,7 +117,10 @@ impl Inner {
             Some(base) => format!("[`{label}`]({base}/?{})", encode_label_query(label)),
             None => format!("`{label}`"),
         };
-        format!("📝 **{}** edited the wiki for {label_part}", md_escape(editor))
+        format!(
+            "📝 **{}** edited the wiki for {label_part}",
+            md_escape(editor)
+        )
     }
 
     /// A clip as a Discord masked link when we know the public origin, or
@@ -131,7 +145,10 @@ fn encode_label_query(label: &str) -> String {
 fn md_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
-        if matches!(c, '\\' | '*' | '_' | '~' | '`' | '|' | '>' | '[' | ']' | '(' | ')' | '@') {
+        if matches!(
+            c,
+            '\\' | '*' | '_' | '~' | '`' | '|' | '>' | '[' | ']' | '(' | ')' | '@'
+        ) {
             out.push('\\');
         }
         out.push(c);
@@ -154,7 +171,10 @@ mod tests {
     #[test]
     fn single_upload_with_base_url_links_the_clip() {
         let msg = inner(Some("https://i.test")).upload_message("simon", &[(7, "Riff".into())]);
-        assert_eq!(msg, "🎵 **simon** uploaded a clip: [Riff](https://i.test/clips/7)");
+        assert_eq!(
+            msg,
+            "🎵 **simon** uploaded a clip: [Riff](https://i.test/clips/7)"
+        );
     }
 
     #[test]
@@ -178,7 +198,10 @@ mod tests {
     #[test]
     fn wiki_edit_links_the_filtered_view() {
         let msg = inner(Some("https://i.test")).wiki_message("simon", "verse-1");
-        assert_eq!(msg, "📝 **simon** edited the wiki for [`verse-1`](https://i.test/?label=verse-1)");
+        assert_eq!(
+            msg,
+            "📝 **simon** edited the wiki for [`verse-1`](https://i.test/?label=verse-1)"
+        );
     }
 
     #[test]

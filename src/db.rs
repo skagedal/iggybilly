@@ -1,7 +1,7 @@
 use std::{path::Path, time::Duration};
 
 use anyhow::{Context, Result};
-use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
+use sqlx::{sqlite::SqliteConnectOptions, SqlitePool};
 
 pub async fn connect(path: &Path) -> Result<SqlitePool> {
     let opts = SqliteConnectOptions::new()

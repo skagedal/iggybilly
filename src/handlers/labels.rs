@@ -1,8 +1,8 @@
 use askama::Template;
 use axum::{
-    Form,
     extract::{Path as AxumPath, Query, State},
     response::{IntoResponse, Redirect, Response},
+    Form,
 };
 use serde::Deserialize;
 
@@ -66,14 +66,12 @@ pub async fn add(
         .bind(&normalised)
         .fetch_one(&mut *tx)
         .await?;
-    sqlx::query(
-        "INSERT OR IGNORE INTO clip_labels (clip_id, label_id, added_by) VALUES (?, ?, ?)",
-    )
-    .bind(clip_id)
-    .bind(label_id.0)
-    .bind(user.id)
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("INSERT OR IGNORE INTO clip_labels (clip_id, label_id, added_by) VALUES (?, ?, ?)")
+        .bind(clip_id)
+        .bind(label_id.0)
+        .bind(user.id)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
 
     let labels = clips::load_labels(&state, clip_id).await?;
@@ -121,7 +119,11 @@ pub async fn search(
     // immediately shows pickable options.
     if trimmed.is_empty() {
         let matches = recent_labels(&state, q.clip_id).await?;
-        return render(Suggestions { query: "", matches, can_create: false });
+        return render(Suggestions {
+            query: "",
+            matches,
+            can_create: false,
+        });
     }
 
     let normalised = trimmed.to_lowercase();
@@ -162,7 +164,11 @@ pub async fn search(
     let exact = names.iter().any(|n| n == &normalised);
     let can_create = !exact && is_valid_label(&normalised);
 
-    render(Suggestions { query: &normalised, matches: names, can_create })
+    render(Suggestions {
+        query: &normalised,
+        matches: names,
+        can_create,
+    })
 }
 
 /// Most recently used labels across all clips, optionally excluding
@@ -329,10 +335,7 @@ pub(crate) async fn load_wiki_view(
 /// Pre-render the wiki view partials for each active filter label that
 /// exists, in the given order. Used by the clip list to show wikis above
 /// the clips. Labels in `active` that don't exist are skipped.
-pub(crate) async fn active_wikis_html(
-    state: &AppState,
-    active: &[&str],
-) -> AppResult<Vec<String>> {
+pub(crate) async fn active_wikis_html(state: &AppState, active: &[&str]) -> AppResult<Vec<String>> {
     let mut out = Vec::new();
     for name in active {
         let row: Option<(i64, String)> =
@@ -446,13 +449,12 @@ pub async fn wiki_restore(
 ) -> AppResult<Response> {
     // Scope the lookup to this label so a mismatched id can't pull in
     // another label's content.
-    let content: Option<(String,)> = sqlx::query_as(
-        "SELECT content FROM label_wiki_revisions WHERE id = ? AND label_id = ?",
-    )
-    .bind(rev_id)
-    .bind(label_id)
-    .fetch_optional(&state.pool)
-    .await?;
+    let content: Option<(String,)> =
+        sqlx::query_as("SELECT content FROM label_wiki_revisions WHERE id = ? AND label_id = ?")
+            .bind(rev_id)
+            .bind(label_id)
+            .fetch_optional(&state.pool)
+            .await?;
     let content = content.map(|(c,)| c).ok_or(AppError::NotFound)?;
 
     insert_revision(&state, label_id, &content, user.id).await?;
@@ -467,14 +469,12 @@ async fn insert_revision(
     content: &str,
     user_id: i64,
 ) -> AppResult<()> {
-    sqlx::query(
-        "INSERT INTO label_wiki_revisions (label_id, content, edited_by) VALUES (?, ?, ?)",
-    )
-    .bind(label_id)
-    .bind(content)
-    .bind(user_id)
-    .execute(&state.pool)
-    .await?;
+    sqlx::query("INSERT INTO label_wiki_revisions (label_id, content, edited_by) VALUES (?, ?, ?)")
+        .bind(label_id)
+        .bind(content)
+        .bind(user_id)
+        .execute(&state.pool)
+        .await?;
     Ok(())
 }
 
@@ -484,14 +484,24 @@ mod tests {
 
     #[test]
     fn accepts_kebab_case_with_diacritics() {
-        for s in ["verse", "verse-1", "verse-one", "pålägg", "café-version", "über-mix", "x"] {
+        for s in [
+            "verse",
+            "verse-1",
+            "verse-one",
+            "pålägg",
+            "café-version",
+            "über-mix",
+            "x",
+        ] {
             assert!(is_valid_label(s), "expected valid: {s}");
         }
     }
 
     #[test]
     fn rejects_bad_shapes() {
-        for s in ["", "-verse", "verse-", "verse--1", "Verse", "verse 1", "verse_1", "verse.1"] {
+        for s in [
+            "", "-verse", "verse-", "verse--1", "Verse", "verse 1", "verse_1", "verse.1",
+        ] {
             assert!(!is_valid_label(s), "expected invalid: {s}");
         }
     }

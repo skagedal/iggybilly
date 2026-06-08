@@ -61,7 +61,11 @@ pub fn compute(path: &Path) -> Option<Waveform> {
     let track = format.default_track(TrackType::Audio)?;
     let track_id = track.id;
     let audio_params = track.codec_params.as_ref()?.audio()?;
-    let channels = audio_params.channels.as_ref().map_or(1, |c| c.count()).max(1);
+    let channels = audio_params
+        .channels
+        .as_ref()
+        .map_or(1, |c| c.count())
+        .max(1);
     let sample_rate = audio_params.sample_rate.unwrap_or(44_100) as f64;
     let mut decoder = symphonia::default::get_codecs()
         .make_audio_decoder(audio_params, &AudioDecoderOptions::default())
@@ -234,7 +238,10 @@ mod tests {
         // Normalised to [0, 1] with the loudest peak reaching 1.0.
         assert!(wf.peaks.iter().all(|p| *p >= 0.0 && *p <= 1.0));
         let max = wf.peaks.iter().copied().fold(0.0f32, f32::max);
-        assert!((max - 1.0).abs() < 1e-3, "peaks should be normalised, max={max}");
+        assert!(
+            (max - 1.0).abs() < 1e-3,
+            "peaks should be normalised, max={max}"
+        );
     }
 
     #[test]

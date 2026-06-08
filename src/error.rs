@@ -39,11 +39,17 @@ impl IntoResponse for AppError {
                 // fault — return 400, but log it so failed uploads are
                 // visible rather than a silent error.
                 tracing::warn!(error = ?e, "rejected multipart upload");
-                (StatusCode::BAD_REQUEST, "could not read the uploaded form data".into())
+                (
+                    StatusCode::BAD_REQUEST,
+                    "could not read the uploaded form data".into(),
+                )
             }
             _ => {
                 tracing::error!(error = ?self, "internal error");
-                (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".into())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal server error".into(),
+                )
             }
         };
         (status, msg).into_response()

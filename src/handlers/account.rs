@@ -1,5 +1,5 @@
 use askama::Template;
-use axum::{Form, extract::State, response::Response};
+use axum::{extract::State, response::Response, Form};
 use serde::Deserialize;
 use tower_sessions::Session;
 
@@ -19,7 +19,11 @@ struct AccountPage {
 }
 
 pub async fn form(CurrentUser(user): CurrentUser) -> AppResult<Response> {
-    render(AccountPage { username: user.username, error: None, success: None })
+    render(AccountPage {
+        username: user.username,
+        error: None,
+        success: None,
+    })
 }
 
 #[derive(Deserialize)]

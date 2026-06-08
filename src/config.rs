@@ -36,8 +36,8 @@ impl Config {
         let discord_webhook_url = non_empty_env("IGGYBILLY_DISCORD_WEBHOOK_URL");
         // Trim a trailing slash so we can build `${base}/clips/1` without
         // risking a double slash.
-        let base_url = non_empty_env("IGGYBILLY_BASE_URL")
-            .map(|u| u.trim_end_matches('/').to_string());
+        let base_url =
+            non_empty_env("IGGYBILLY_BASE_URL").map(|u| u.trim_end_matches('/').to_string());
         Self {
             listen_addr,
             data_dir,
@@ -54,5 +54,8 @@ impl Config {
 /// (both yield `None`) so an env var set to "" disables the feature
 /// rather than producing a useless empty URL.
 fn non_empty_env(key: &str) -> Option<String> {
-    std::env::var(key).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+    std::env::var(key)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }

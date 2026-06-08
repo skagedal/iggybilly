@@ -2,24 +2,22 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
 use axum::{
-    Router,
     extract::{DefaultBodyLimit, FromRequestParts},
     http::request::Parts,
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
+    Router,
 };
 use sqlx::SqlitePool;
 use tokio::net::TcpListener;
 use tower_http::{
-    LatencyUnit,
     services::ServeDir,
     trace::{DefaultOnRequest, DefaultOnResponse, TraceLayer},
+    LatencyUnit,
 };
-use tracing::Level;
-use tower_sessions::{
-    Expiry, ExpiredDeletion, Session, SessionManagerLayer, cookie::SameSite,
-};
+use tower_sessions::{cookie::SameSite, ExpiredDeletion, Expiry, Session, SessionManagerLayer};
 use tower_sessions_sqlx_store::SqliteStore;
+use tracing::Level;
 
 use crate::{
     config::Config,
@@ -86,9 +84,12 @@ pub async fn build_app(pool: SqlitePool, config: Arc<Config>) -> Result<Router> 
         .with_same_site(SameSite::Strict)
         .with_expiry(Expiry::OnInactivity(time::Duration::days(30)));
 
-    let discord =
-        Discord::new(config.discord_webhook_url.clone(), config.base_url.clone());
-    let state = AppState { pool, config, discord };
+    let discord = Discord::new(config.discord_webhook_url.clone(), config.base_url.clone());
+    let state = AppState {
+        pool,
+        config,
+        discord,
+    };
 
     Ok(Router::new()
         .route("/", get(clips::list))
@@ -102,15 +103,30 @@ pub async fn build_app(pool: SqlitePool, config: Arc<Config>) -> Result<Router> 
         .route("/clips/{id}/name/form", get(clips::rename_form))
         .route("/clips/{id}/name/display", get(clips::rename_display))
         .route("/clips/{id}/labels", post(labels::add))
-        .route("/clips/{id}/labels/{label_id}", axum::routing::delete(labels::remove))
+        .route(
+            "/clips/{id}/labels/{label_id}",
+            axum::routing::delete(labels::remove),
+        )
         .route("/labels/search", get(labels::search))
-        .route("/labels/{id}/wiki", get(labels::wiki_view).post(labels::wiki_save))
+        .route(
+            "/labels/{id}/wiki",
+            get(labels::wiki_view).post(labels::wiki_save),
+        )
         .route("/labels/{id}/wiki/edit", get(labels::wiki_edit_form))
         .route("/labels/{id}/wiki/history", get(labels::wiki_history))
-        .route("/labels/{id}/wiki/restore/{rev}", post(labels::wiki_restore))
-        .route("/login", get(auth_handlers::login_form).post(auth_handlers::login))
+        .route(
+            "/labels/{id}/wiki/restore/{rev}",
+            post(labels::wiki_restore),
+        )
+        .route(
+            "/login",
+            get(auth_handlers::login_form).post(auth_handlers::login),
+        )
         .route("/logout", post(auth_handlers::logout))
-        .route("/account", get(account::form).post(account::change_password))
+        .route(
+            "/account",
+            get(account::form).post(account::change_password),
+        )
         .route("/healthz", get(healthz))
         .nest_service("/static", ServeDir::new("static"))
         .layer(session_layer)

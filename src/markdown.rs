@@ -14,7 +14,7 @@
 //! it never parses as a wiki-link in the first place.
 
 use comrak::nodes::{AstNode, NodeValue};
-use comrak::{Arena, Options, format_html, parse_document};
+use comrak::{format_html, parse_document, Arena, Options};
 
 /// Render Markdown to sanitised HTML. Raw HTML is escaped, so the output
 /// is safe to embed with Askama's `|safe`.
@@ -111,6 +111,9 @@ mod tests {
     fn wikilinks_in_code_are_left_alone() {
         let html = render("Type `[[verse]]` to link.");
         assert!(html.contains("<code>[[verse]]</code>"));
-        assert!(!html.contains("href="), "code span must not become a link: {html}");
+        assert!(
+            !html.contains("href="),
+            "code span must not become a link: {html}"
+        );
     }
 }

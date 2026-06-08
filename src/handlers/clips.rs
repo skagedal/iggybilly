@@ -2,11 +2,11 @@ use std::path::{Path, PathBuf};
 
 use askama::Template;
 use axum::{
-    Form,
     body::Body,
     extract::{Multipart, Path as AxumPath, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Redirect, Response},
+    Form,
 };
 use axum_extra::extract::Query;
 use serde::Deserialize;
@@ -53,9 +53,8 @@ fn filter_url(labels: &[&str]) -> String {
     if labels.is_empty() {
         return "/".to_string();
     }
-    let qs =
-        serde_urlencoded::to_string(labels.iter().map(|l| ("label", *l)).collect::<Vec<_>>())
-            .unwrap_or_default();
+    let qs = serde_urlencoded::to_string(labels.iter().map(|l| ("label", *l)).collect::<Vec<_>>())
+        .unwrap_or_default();
     format!("/?{qs}")
 }
 
@@ -111,18 +110,35 @@ pub async fn list(
                 .filter(|(j, _)| *j != i)
                 .map(|(_, s)| *s)
                 .collect();
-            FilterChip { name: name.clone(), remove_href: filter_url(&remaining) }
+            FilterChip {
+                name: name.clone(),
+                remove_href: filter_url(&remaining),
+            }
         })
         .collect();
 
-    render(IndexPage { username: user.username, clips, active_filters, active_wikis })
+    render(IndexPage {
+        username: user.username,
+        clips,
+        active_filters,
+        active_wikis,
+    })
 }
 
 async fn load_clips(pool: &SqlitePool, active: &[&str]) -> AppResult<Vec<ClipRow>> {
     // AND filter: a clip must have every label in `active`. Done with
     // GROUP BY HAVING COUNT(DISTINCT label_id) = N. The IN-list is
     // built with ? placeholders since sqlx doesn't expand Vec<_>.
-    type Row = (i64, String, String, String, Option<String>, String, Option<String>, Option<f64>);
+    type Row = (
+        i64,
+        String,
+        String,
+        String,
+        Option<String>,
+        String,
+        Option<String>,
+        Option<f64>,
+    );
     let rows: Vec<Row> = if active.is_empty() {
         sqlx::query_as(
             "SELECT c.id, c.name, c.original_filename, c.uploaded_at,
@@ -155,8 +171,16 @@ async fn load_clips(pool: &SqlitePool, active: &[&str]) -> AppResult<Vec<ClipRow
     };
 
     let mut clips = Vec::with_capacity(rows.len());
-    for (id, name, original_filename, uploaded_at, recording_date, uploader, peaks, duration_seconds)
-        in rows
+    for (
+        id,
+        name,
+        original_filename,
+        uploaded_at,
+        recording_date,
+        uploader,
+        peaks,
+        duration_seconds,
+    ) in rows
     {
         let label_rows: Vec<(String,)> = sqlx::query_as(
             "SELECT l.name FROM labels l
@@ -227,8 +251,17 @@ pub async fn detail(
     CurrentUser(user): CurrentUser,
     AxumPath(id): AxumPath<i64>,
 ) -> AppResult<Response> {
-    type DetailRow =
-        (i64, String, String, String, String, Option<String>, String, Option<String>, Option<f64>);
+    type DetailRow = (
+        i64,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        String,
+        Option<String>,
+        Option<f64>,
+    );
     let row: Option<DetailRow> = sqlx::query_as(
         "SELECT c.id, c.name, c.original_filename, c.content_type,
                 c.uploaded_at, c.recording_date, u.username, c.peaks, c.duration_seconds
@@ -281,7 +314,11 @@ pub(super) async fn load_labels(state: &AppState, clip_id: i64) -> AppResult<Vec
         .into_iter()
         .map(|(id, name)| {
             let filter_href = filter_url(&[name.as_str()]);
-            ClipLabel { id, name, filter_href }
+            ClipLabel {
+                id,
+                name,
+                filter_href,
+            }
         })
         .collect())
 }
@@ -341,9 +378,7 @@ pub async fn audio(
         // upload name.
         let ascii = sanitise_for_ascii_filename(&original_filename);
         let utf8 = percent_encode_filename(&original_filename);
-        let disp = format!(
-            "attachment; filename=\"{ascii}\"; filename*=UTF-8''{utf8}"
-        );
+        let disp = format!("attachment; filename=\"{ascii}\"; filename*=UTF-8''{utf8}");
         if let Ok(v) = HeaderValue::from_str(&disp) {
             headers.insert(header::CONTENT_DISPOSITION, v);
         }
@@ -455,7 +490,10 @@ pub async fn upload(
         .await
         .unwrap_or((None, None));
         let (peaks_json, duration_seconds) = match waveform {
-            Some(w) => (Some(crate::audio::peaks_to_json(&w.peaks)), Some(w.duration_seconds)),
+            Some(w) => (
+                Some(crate::audio::peaks_to_json(&w.peaks)),
+                Some(w.duration_seconds),
+            ),
             None => (None, None),
         };
 
@@ -491,7 +529,9 @@ pub async fn upload(
     }
 
     if uploaded.is_empty() {
-        return Err(AppError::BadRequest("at least one audio file is required".into()));
+        return Err(AppError::BadRequest(
+            "at least one audio file is required".into(),
+        ));
     }
     // One Discord post for the whole batch, fire-and-forget.
     state.discord.clips_uploaded(&user.username, &uploaded);
@@ -541,7 +581,11 @@ async fn insert_with_unique_name(
     let base = if base.is_empty() { "clip" } else { base };
     let mut n: u32 = 1;
     loop {
-        let candidate = if n == 1 { base.to_string() } else { format!("{base} ({n})") };
+        let candidate = if n == 1 {
+            base.to_string()
+        } else {
+            format!("{base} ({n})")
+        };
         let exists: Option<(i64,)> =
             sqlx::query_as("SELECT id FROM clips WHERE name = ? COLLATE NOCASE")
                 .bind(&candidate)
@@ -637,7 +681,9 @@ fn recording_date_from_udta_date(path: &PathBuf) -> Option<String> {
     let mut buf = vec![0u8; len as usize];
     file.read_exact(&mut buf).ok()?;
 
-    Some(crate::datefmt::iso_date_from_rfc3339(std::str::from_utf8(&buf).ok()?.trim()))
+    Some(crate::datefmt::iso_date_from_rfc3339(
+        std::str::from_utf8(&buf).ok()?.trim(),
+    ))
 }
 
 /// Last-resort recording date: the MP4 movie header's creation time,
@@ -793,7 +839,10 @@ pub async fn rename(
 
     match result {
         Ok(r) if r.rows_affected() == 0 => Err(AppError::NotFound),
-        Ok(_) => render(ClipHeader { clip_id: id, name: new_name.to_string() }),
+        Ok(_) => render(ClipHeader {
+            clip_id: id,
+            name: new_name.to_string(),
+        }),
         Err(sqlx::Error::Database(d)) if d.is_unique_violation() => Ok((
             StatusCode::CONFLICT,
             format!("A clip named “{new_name}” already exists."),
@@ -814,8 +863,7 @@ mod tests {
     // report the recording date, not the edit date.
     #[test]
     fn extracts_recording_date_from_udta_date() {
-        let path =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/guitar-clip.m4a");
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/guitar-clip.m4a");
         assert_eq!(extract_recording_date(&path).as_deref(), Some("2026-05-22"));
     }
 }

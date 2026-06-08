@@ -76,12 +76,8 @@ pub async fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Command::ListUsers => list_users(&pool).await,
-        Command::BackfillDates { dry_run } => {
-            backfill_dates(&config, &pool, dry_run).await
-        }
-        Command::BackfillWaveforms { dry_run } => {
-            backfill_waveforms(&config, &pool, dry_run).await
-        }
+        Command::BackfillDates { dry_run } => backfill_dates(&config, &pool, dry_run).await,
+        Command::BackfillWaveforms { dry_run } => backfill_waveforms(&config, &pool, dry_run).await,
     }
 }
 
@@ -109,11 +105,7 @@ async fn list_users(pool: &sqlx::SqlitePool) -> Result<()> {
 /// Re-derive `recording_date` for every clip that's currently missing
 /// one. Only touches NULL rows, so it's safe to re-run and never
 /// overwrites a date already on file.
-async fn backfill_dates(
-    config: &Config,
-    pool: &sqlx::SqlitePool,
-    dry_run: bool,
-) -> Result<()> {
+async fn backfill_dates(config: &Config, pool: &sqlx::SqlitePool, dry_run: bool) -> Result<()> {
     let clips: Vec<(i64, String)> =
         sqlx::query_as("SELECT id, storage_filename FROM clips WHERE recording_date IS NULL")
             .fetch_all(pool)
@@ -167,11 +159,7 @@ async fn backfill_dates(
 
 /// Compute and store waveform peaks for every clip that's currently
 /// missing them. Only touches NULL rows, so it's safe to re-run.
-async fn backfill_waveforms(
-    config: &Config,
-    pool: &sqlx::SqlitePool,
-    dry_run: bool,
-) -> Result<()> {
+async fn backfill_waveforms(config: &Config, pool: &sqlx::SqlitePool, dry_run: bool) -> Result<()> {
     let clips: Vec<(i64, String)> =
         sqlx::query_as("SELECT id, storage_filename FROM clips WHERE peaks IS NULL")
             .fetch_all(pool)

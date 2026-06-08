@@ -1,8 +1,8 @@
 use askama::Template;
 use axum::{
-    Form,
     extract::State,
     response::{IntoResponse, Redirect, Response},
+    Form,
 };
 use serde::Deserialize;
 use tower_sessions::Session;
@@ -59,14 +59,20 @@ pub async fn login(
 
     if !ok {
         auth::failed_login_penalty().await;
-        return render(LoginPage { error: Some("Invalid username or password.") });
+        return render(LoginPage {
+            error: Some("Invalid username or password."),
+        });
     }
     let (id, username, is_admin) = user_record.expect("ok implies a user row");
 
     // Rotate the session id on auth boundary so any pre-login session
     // fixation attempt is invalidated.
     session.cycle_id().await?;
-    let user = SessionUser { id, username, is_admin: is_admin != 0 };
+    let user = SessionUser {
+        id,
+        username,
+        is_admin: is_admin != 0,
+    };
     session.insert(SESSION_USER_KEY, &user).await?;
     Ok(Redirect::to("/").into_response())
 }

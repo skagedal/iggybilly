@@ -55,7 +55,11 @@ fn stockholm_offset(utc: OffsetDateTime) -> UtcOffset {
     let dst_start = at_0100_utc(Month::March);
     let dst_end = at_0100_utc(Month::October);
 
-    if utc >= dst_start && utc < dst_end { cest } else { cet }
+    if utc >= dst_start && utc < dst_end {
+        cest
+    } else {
+        cet
+    }
 }
 
 /// The last Sunday of `month` in `year`. Only called for March and
@@ -77,9 +81,15 @@ mod tests {
         // Summer (CEST, +02:00): 22:30 UTC is already past midnight in
         // Stockholm, so the date rolls forward. With a naive +01:00 it
         // would still read the 1st — this pins the DST offset.
-        assert_eq!(iso_date_from_rfc3339("2026-08-01T22:30:00.000Z"), "2026-08-02");
+        assert_eq!(
+            iso_date_from_rfc3339("2026-08-01T22:30:00.000Z"),
+            "2026-08-02"
+        );
         // Winter (CET, +01:00): 22:30 UTC is 23:30 in Stockholm, same day.
-        assert_eq!(iso_date_from_rfc3339("2026-02-01T22:30:00.000Z"), "2026-02-01");
+        assert_eq!(
+            iso_date_from_rfc3339("2026-02-01T22:30:00.000Z"),
+            "2026-02-01"
+        );
     }
 
     #[test]
@@ -87,10 +97,16 @@ mod tests {
         // DST 2026 runs [2026-03-29 01:00 UTC, 2026-10-25 01:00 UTC).
         // Just inside the autumn end it's still CEST (+02:00): 23:30 UTC
         // on the 24th is 01:30 on the 25th locally.
-        assert_eq!(iso_date_from_rfc3339("2026-10-24T23:30:00.000Z"), "2026-10-25");
+        assert_eq!(
+            iso_date_from_rfc3339("2026-10-24T23:30:00.000Z"),
+            "2026-10-25"
+        );
         // Just after the switch back to CET (+01:00): 23:30 UTC on the
         // 25th is 00:30 on the 26th locally.
-        assert_eq!(iso_date_from_rfc3339("2026-10-25T23:30:00.000Z"), "2026-10-26");
+        assert_eq!(
+            iso_date_from_rfc3339("2026-10-25T23:30:00.000Z"),
+            "2026-10-26"
+        );
     }
 
     #[test]
@@ -104,8 +120,14 @@ mod tests {
     #[test]
     fn datetime_uses_stockholm_time() {
         // Summer +02:00: 19:46 UTC -> 21:46 local.
-        assert_eq!(datetime_from_rfc3339("2026-05-29T19:46:11.000Z"), "2026-05-29 21:46");
+        assert_eq!(
+            datetime_from_rfc3339("2026-05-29T19:46:11.000Z"),
+            "2026-05-29 21:46"
+        );
         // Winter +01:00: 23:30 UTC -> 00:30 next day local.
-        assert_eq!(datetime_from_rfc3339("2026-02-01T23:30:00.000Z"), "2026-02-02 00:30");
+        assert_eq!(
+            datetime_from_rfc3339("2026-02-01T23:30:00.000Z"),
+            "2026-02-02 00:30"
+        );
     }
 }

@@ -56,7 +56,12 @@ async fn start_with(discord_webhook_url: Option<String>, base_url: Option<String
         let _ = axum::serve(listener, app).await;
     });
 
-    Server { base: format!("http://{addr}"), pool, _temp: temp, _handle: handle }
+    Server {
+        base: format!("http://{addr}"),
+        pool,
+        _temp: temp,
+        _handle: handle,
+    }
 }
 
 fn client() -> reqwest::Client {
@@ -95,7 +100,12 @@ async fn upload_one(srv: &Server, c: &reqwest::Client, filename: &str) {
         .mime_str("audio/mpeg")
         .unwrap();
     let form = reqwest::multipart::Form::new().part("audio", part);
-    let r = c.post(format!("{}/clips", srv.base)).multipart(form).send().await.unwrap();
+    let r = c
+        .post(format!("{}/clips", srv.base))
+        .multipart(form)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 303);
 }
 
@@ -110,7 +120,12 @@ async fn upload_many(srv: &Server, c: &reqwest::Client, filenames: &[&str]) {
             .unwrap();
         form = form.part("audio", part);
     }
-    let r = c.post(format!("{}/clips", srv.base)).multipart(form).send().await.unwrap();
+    let r = c
+        .post(format!("{}/clips", srv.base))
+        .multipart(form)
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 303);
 }
 
@@ -157,7 +172,11 @@ async fn login_with_wrong_password_fails() {
         .unwrap();
     // Re-renders the login form with an error rather than redirecting.
     assert_eq!(r.status(), 200);
-    assert!(r.text().await.unwrap().contains("Invalid username or password"));
+    assert!(r
+        .text()
+        .await
+        .unwrap()
+        .contains("Invalid username or password"));
 }
 
 #[tokio::test]
@@ -171,8 +190,10 @@ async fn upload_derives_name_and_auto_suffixes_on_conflict() {
         upload_one(&srv, &c, "Rehearsal.mp3").await;
     }
 
-    let rows: Vec<(String,)> =
-        sqlx::query_as("SELECT name FROM clips ORDER BY id").fetch_all(&srv.pool).await.unwrap();
+    let rows: Vec<(String,)> = sqlx::query_as("SELECT name FROM clips ORDER BY id")
+        .fetch_all(&srv.pool)
+        .await
+        .unwrap();
     let names: Vec<&str> = rows.iter().map(|(n,)| n.as_str()).collect();
     assert_eq!(names, vec!["Rehearsal", "Rehearsal (2)", "Rehearsal (3)"]);
 }
@@ -188,8 +209,10 @@ async fn upload_accepts_multiple_files_in_one_request() {
     // the per-file unique-name suffixing still applies within a batch.
     upload_many(&srv, &c, &["Verse.mp3", "Chorus.mp3", "Verse.mp3"]).await;
 
-    let rows: Vec<(String,)> =
-        sqlx::query_as("SELECT name FROM clips ORDER BY id").fetch_all(&srv.pool).await.unwrap();
+    let rows: Vec<(String,)> = sqlx::query_as("SELECT name FROM clips ORDER BY id")
+        .fetch_all(&srv.pool)
+        .await
+        .unwrap();
     let names: Vec<&str> = rows.iter().map(|(n,)| n.as_str()).collect();
     assert_eq!(names, vec!["Verse", "Chorus", "Verse (2)"]);
 }
@@ -211,13 +234,19 @@ async fn label_wiki_saves_renders_history_and_restores() {
     // Save a wiki page; the <script> must be neutralised in the render.
     let r = c
         .post(format!("{}/labels/{label_id}/wiki", srv.base))
-        .form(&[("content", "# Verse\n\nLyrics **here** <script>alert(1)</script>")])
+        .form(&[(
+            "content",
+            "# Verse\n\nLyrics **here** <script>alert(1)</script>",
+        )])
         .send()
         .await
         .unwrap();
     assert_eq!(r.status(), 200);
     let body = r.text().await.unwrap();
-    assert!(body.contains("<strong>here</strong>"), "markdown should render");
+    assert!(
+        body.contains("<strong>here</strong>"),
+        "markdown should render"
+    );
     assert!(!body.contains("<script>"), "raw HTML must be stripped");
 
     // The filtered clip list shows the rendered wiki above the clips.
@@ -266,7 +295,10 @@ async fn label_wiki_saves_renders_history_and_restores() {
             .await
             .unwrap();
     let r = c
-        .post(format!("{}/labels/{label_id}/wiki/restore/{oldest}", srv.base))
+        .post(format!(
+            "{}/labels/{label_id}/wiki/restore/{oldest}",
+            srv.base
+        ))
         .send()
         .await
         .unwrap();
@@ -280,7 +312,10 @@ async fn label_wiki_saves_renders_history_and_restores() {
     .await
     .unwrap();
     assert_eq!(count, 3);
-    assert!(latest.starts_with("# Verse\n\nLyrics"), "restored content is now current");
+    assert!(
+        latest.starts_with("# Verse\n\nLyrics"),
+        "restored content is now current"
+    );
 }
 
 #[tokio::test]
@@ -329,10 +364,11 @@ async fn add_label_accepts_valid_and_normalises_case() {
         assert_eq!(r.status(), 200, "expected 200 for label '{input}'");
     }
 
-    let rows: Vec<(String,)> = sqlx::query_as("SELECT name FROM labels ORDER BY name COLLATE NOCASE")
-        .fetch_all(&srv.pool)
-        .await
-        .unwrap();
+    let rows: Vec<(String,)> =
+        sqlx::query_as("SELECT name FROM labels ORDER BY name COLLATE NOCASE")
+            .fetch_all(&srv.pool)
+            .await
+            .unwrap();
     let names: Vec<&str> = rows.iter().map(|(n,)| n.as_str()).collect();
     // All stored lowercase, including the previously-uppercase "Chorus".
     assert_eq!(names, vec!["chorus", "pålägg", "verse-1"]);
@@ -356,8 +392,10 @@ async fn add_label_rejects_invalid_shapes() {
         assert_eq!(r.status(), 400, "expected 400 for label '{bad}'");
     }
 
-    let count: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM labels").fetch_one(&srv.pool).await.unwrap();
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM labels")
+        .fetch_one(&srv.pool)
+        .await
+        .unwrap();
     assert_eq!(count.0, 0, "no labels should have been created");
 }
 
@@ -451,7 +489,10 @@ async fn label_autocomplete_offers_create_for_new_query() {
         .text()
         .await
         .unwrap();
-    assert!(body.contains("verse"), "should list the matching existing label");
+    assert!(
+        body.contains("verse"),
+        "should list the matching existing label"
+    );
     assert!(
         body.contains("Create new label"),
         "non-exact match should offer to create"
@@ -467,7 +508,11 @@ async fn audio_download_sets_content_disposition() {
     upload_one(&srv, &c, "Pålägg.mp3").await;
 
     // Plain ?audio — inline playback, no disposition header.
-    let r = c.get(format!("{}/clips/1/audio", srv.base)).send().await.unwrap();
+    let r = c
+        .get(format!("{}/clips/1/audio", srv.base))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 200);
     assert!(
         r.headers().get("content-disposition").is_none(),
@@ -475,10 +520,22 @@ async fn audio_download_sets_content_disposition() {
     );
 
     // ?download=1 — attachment + RFC 6266 UTF-8 filename* parameter.
-    let r = c.get(format!("{}/clips/1/audio?download=1", srv.base)).send().await.unwrap();
-    let cd = r.headers().get("content-disposition").unwrap().to_str().unwrap();
+    let r = c
+        .get(format!("{}/clips/1/audio?download=1", srv.base))
+        .send()
+        .await
+        .unwrap();
+    let cd = r
+        .headers()
+        .get("content-disposition")
+        .unwrap()
+        .to_str()
+        .unwrap();
     assert!(cd.starts_with("attachment"), "got: {cd}");
-    assert!(cd.contains("filename*=UTF-8''"), "missing UTF-8 filename: {cd}");
+    assert!(
+        cd.contains("filename*=UTF-8''"),
+        "missing UTF-8 filename: {cd}"
+    );
 }
 
 #[tokio::test]
@@ -509,7 +566,11 @@ async fn change_password_updates_credentials() {
         .send()
         .await
         .unwrap();
-    assert_eq!(r.status(), 200, "old password should now be rejected (re-renders form)");
+    assert_eq!(
+        r.status(),
+        200,
+        "old password should now be rejected (re-renders form)"
+    );
 
     let r = c2
         .post(format!("{}/login", srv.base))
@@ -523,8 +584,11 @@ async fn change_password_updates_credentials() {
 /// Spin up a throwaway HTTP server that captures the JSON body of every
 /// POST it receives and forwards it down a channel. Stands in for a
 /// Discord webhook endpoint so we can assert on what the app would post.
-async fn mock_webhook() -> (String, tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>) {
-    use axum::{Router, routing::post};
+async fn mock_webhook() -> (
+    String,
+    tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+) {
+    use axum::{routing::post, Router};
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     let app = Router::new().route(
@@ -567,15 +631,30 @@ async fn uploading_clips_posts_to_discord() {
 
     // A single upload: one post, naming the clip and linking it.
     upload_one(&srv, &c, "Riff.mp3").await;
-    let content = next_post(&mut rx).await["content"].as_str().unwrap().to_string();
+    let content = next_post(&mut rx).await["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
     assert!(content.contains("alice"), "names the uploader: {content}");
-    assert!(content.contains("[Riff](https://iggybilly.test/clips/1)"), "links the clip: {content}");
+    assert!(
+        content.contains("[Riff](https://iggybilly.test/clips/1)"),
+        "links the clip: {content}"
+    );
 
     // A batch upload: a single post listing both clips, not one each.
     upload_many(&srv, &c, &["Verse.mp3", "Chorus.mp3"]).await;
-    let content = next_post(&mut rx).await["content"].as_str().unwrap().to_string();
-    assert!(content.contains("2 clips"), "summarises the batch: {content}");
-    assert!(content.contains("Verse") && content.contains("Chorus"), "lists both: {content}");
+    let content = next_post(&mut rx).await["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        content.contains("2 clips"),
+        "summarises the batch: {content}"
+    );
+    assert!(
+        content.contains("Verse") && content.contains("Chorus"),
+        "lists both: {content}"
+    );
 }
 
 #[tokio::test]
@@ -600,8 +679,14 @@ async fn editing_a_wiki_posts_to_discord() {
         .await
         .unwrap();
 
-    let content = next_post(&mut rx).await["content"].as_str().unwrap().to_string();
+    let content = next_post(&mut rx).await["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
     assert!(content.contains("alice"), "names the editor: {content}");
     assert!(content.contains("verse"), "names the label: {content}");
-    assert!(content.contains("?label=verse"), "links the wiki view: {content}");
+    assert!(
+        content.contains("?label=verse"),
+        "links the wiki view: {content}"
+    );
 }

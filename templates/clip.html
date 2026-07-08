@@ -49,6 +49,17 @@
     <div id="label-suggestions"></div>
     <button type="submit">Add</button>
   </form>
+
+  {% if can_delete %}
+    <div class="clip-actions">
+      <button type="button"
+              class="delete-btn"
+              hx-delete="/clips/{{ clip_id }}"
+              hx-confirm="Delete “{{ name }}”? This removes the clip and its audio for everyone, and can't be undone.">
+        Delete clip
+      </button>
+    </div>
+  {% endif %}
 </section>
 
 <script>

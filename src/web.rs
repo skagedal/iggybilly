@@ -97,7 +97,7 @@ pub async fn build_app(pool: SqlitePool, config: Arc<Config>) -> Result<Router> 
             "/clips",
             post(clips::upload).layer(DefaultBodyLimit::max(MAX_UPLOAD_REQUEST_BYTES)),
         )
-        .route("/clips/{id}", get(clips::detail))
+        .route("/clips/{id}", get(clips::detail).delete(clips::delete))
         .route("/clips/{id}/audio", get(clips::audio))
         .route("/clips/{id}/name", post(clips::rename))
         .route("/clips/{id}/name/form", get(clips::rename_form))

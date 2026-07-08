@@ -244,6 +244,9 @@ struct ClipPage {
     labels: Vec<ClipLabel>,
     peaks: Option<String>,
     duration_seconds: Option<f64>,
+    /// Whether the current user may delete this clip. True only for the
+    /// uploader — you can remove your own clips, nobody else's.
+    can_delete: bool,
 }
 
 pub async fn detail(
@@ -259,12 +262,14 @@ pub async fn detail(
         String,
         Option<String>,
         String,
+        i64,
         Option<String>,
         Option<f64>,
     );
     let row: Option<DetailRow> = sqlx::query_as(
         "SELECT c.id, c.name, c.original_filename, c.content_type,
-                c.uploaded_at, c.recording_date, u.username, c.peaks, c.duration_seconds
+                c.uploaded_at, c.recording_date, u.username, c.uploaded_by,
+                c.peaks, c.duration_seconds
          FROM clips c JOIN users u ON u.id = c.uploaded_by
          WHERE c.id = ?",
     )
@@ -280,6 +285,7 @@ pub async fn detail(
         uploaded_at,
         recording_date,
         uploader,
+        uploaded_by,
         peaks,
         duration_seconds,
     ) = row.ok_or(AppError::NotFound)?;
@@ -298,7 +304,51 @@ pub async fn detail(
         labels,
         peaks,
         duration_seconds,
+        can_delete: uploaded_by == user.id,
     })
+}
+
+/// DELETE /clips/{id} — remove a clip the current user uploaded, along
+/// with its audio file on disk. Only the uploader may delete; anyone
+/// else gets a 403 (the button isn't shown to them, so this is the
+/// defence for a hand-crafted request). On success we tell HTMX to
+/// navigate back to the clip list, since the page we were on is gone.
+pub async fn delete(
+    State(state): State<AppState>,
+    CurrentUserApi(user): CurrentUserApi,
+    AxumPath(id): AxumPath<i64>,
+) -> AppResult<Response> {
+    let row: Option<(i64, String)> =
+        sqlx::query_as("SELECT uploaded_by, storage_filename FROM clips WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let (uploaded_by, storage_filename) = row.ok_or(AppError::NotFound)?;
+    if uploaded_by != user.id {
+        return Err(AppError::Forbidden);
+    }
+
+    // Delete the row first; clip_labels rows go with it via ON DELETE
+    // CASCADE (foreign_keys is on). Only once the DB commit succeeds do
+    // we remove the file, so a failed delete never orphans the row from
+    // its bytes.
+    sqlx::query("DELETE FROM clips WHERE id = ?")
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+
+    // Best-effort file removal: if it's already gone (or never had a
+    // readable path), log and move on rather than 500 — the clip is
+    // already unreachable from the app.
+    let path = state.config.audio_dir.join(&storage_filename);
+    if let Err(e) = tokio::fs::remove_file(&path).await {
+        tracing::warn!(error = ?e, path = %path.display(), "failed to delete audio file for removed clip");
+    }
+
+    // HTMX honours HX-Redirect by doing a client-side navigation.
+    let mut headers = HeaderMap::new();
+    headers.insert("HX-Redirect", HeaderValue::from_static("/"));
+    Ok((StatusCode::OK, headers).into_response())
 }
 
 pub(super) async fn load_labels(state: &AppState, clip_id: i64) -> AppResult<Vec<ClipLabel>> {

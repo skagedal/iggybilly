@@ -9,6 +9,9 @@ as a single container to `iggybilly.skagedal.tech`.
 - Each user can change their own password; admin resets are CLI-only.
 - Anyone can upload an audio file (mp3, m4a, anything browsers play),
   give it a name, and see it in a reverse-chronological list.
+- Each user can delete clips they uploaded (from the clip's own page);
+  the row, its labels, and the audio file on disk all go with it. You
+  can't delete someone else's clip.
 - Each clip shows a waveform preview; pressing play sends it to a single
   global player bar (wavesurfer.js) fixed to the bottom of the page.
   Navigation is boosted (htmx) so the bar keeps playing as you move

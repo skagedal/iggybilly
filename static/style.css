@@ -250,6 +250,16 @@ button:hover { filter: brightness(0.95); }
 .rename-form input { flex: 1 1 auto; max-width: 320px; width: auto; }
 .rename-form .link { color: var(--muted); }
 
+.clip-actions { margin-top: 2rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+.delete-btn {
+  background: none;
+  color: var(--error);
+  border: 1px solid var(--error);
+  padding: 0.2rem 0.6rem;
+  font-size: 0.85rem;
+}
+.delete-btn:hover { background: var(--error); color: #fff; }
+
 .clip-list { list-style: none; padding: 0; }
 
 .clip-name {

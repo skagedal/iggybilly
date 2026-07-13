@@ -11,6 +11,8 @@ pub enum AppError {
     NotFound,
     #[error("unauthorized")]
     Unauthorized,
+    #[error("forbidden")]
+    Forbidden,
     #[error("bad request: {0}")]
     BadRequest(String),
     #[error(transparent)]
@@ -32,6 +34,7 @@ impl IntoResponse for AppError {
         let (status, msg): (StatusCode, String) = match &self {
             AppError::NotFound => (StatusCode::NOT_FOUND, "not found".into()),
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".into()),
+            AppError::Forbidden => (StatusCode::FORBIDDEN, "forbidden".into()),
             AppError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
             AppError::Multipart(e) => {
                 // A malformed or interrupted multipart body is a client

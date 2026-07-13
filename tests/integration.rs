@@ -319,6 +319,120 @@ async fn label_wiki_saves_renders_history_and_restores() {
 }
 
 #[tokio::test]
+async fn uploader_can_delete_own_clip_and_bytes_are_removed() {
+    let srv = start().await;
+    create_user(&srv.pool, "alice", "pw").await;
+    let c = client();
+    login(&srv, &c, "alice", "pw").await;
+
+    upload_one(&srv, &c, "Take.mp3").await;
+    add_label(&srv, &c, 1, "verse").await;
+
+    // The audio file exists on disk before the delete.
+    let (storage,): (String,) = sqlx::query_as("SELECT storage_filename FROM clips WHERE id = 1")
+        .fetch_one(&srv.pool)
+        .await
+        .unwrap();
+    let audio_path = srv._temp.path().join("audio").join(&storage);
+    assert!(audio_path.exists(), "audio file should exist before delete");
+
+    let r = c
+        .delete(format!("{}/clips/1", srv.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    // HTMX is told to navigate back to the clip list.
+    assert_eq!(r.headers().get("hx-redirect").unwrap(), "/");
+
+    // Row is gone, its label link is gone (ON DELETE CASCADE), and so
+    // are the bytes on disk.
+    let (clips,): (i64,) = sqlx::query_as("SELECT count(*) FROM clips")
+        .fetch_one(&srv.pool)
+        .await
+        .unwrap();
+    assert_eq!(clips, 0, "clip row should be deleted");
+    let (links,): (i64,) = sqlx::query_as("SELECT count(*) FROM clip_labels")
+        .fetch_one(&srv.pool)
+        .await
+        .unwrap();
+    assert_eq!(links, 0, "clip_labels rows should cascade-delete");
+    assert!(
+        !audio_path.exists(),
+        "audio file should be removed from disk"
+    );
+}
+
+#[tokio::test]
+async fn cannot_delete_another_users_clip() {
+    let srv = start().await;
+    create_user(&srv.pool, "alice", "pw").await;
+    create_user(&srv.pool, "bob", "pw").await;
+
+    // Alice uploads a clip.
+    let alice = client();
+    login(&srv, &alice, "alice", "pw").await;
+    upload_one(&srv, &alice, "Take.mp3").await;
+
+    // Bob may not delete it.
+    let bob = client();
+    login(&srv, &bob, "bob", "pw").await;
+    let r = bob
+        .delete(format!("{}/clips/1", srv.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 403, "non-uploader should be forbidden");
+
+    let (clips,): (i64,) = sqlx::query_as("SELECT count(*) FROM clips")
+        .fetch_one(&srv.pool)
+        .await
+        .unwrap();
+    assert_eq!(clips, 1, "clip must survive a forbidden delete");
+
+    // Bob's own detail page shows no delete control; alice's does.
+    let bob_view = bob
+        .get(format!("{}/clips/1", srv.base))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        !bob_view.contains("hx-delete"),
+        "bob shouldn't see a delete button on alice's clip"
+    );
+    let alice_view = alice
+        .get(format!("{}/clips/1", srv.base))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        alice_view.contains("hx-delete"),
+        "alice should see a delete button on her own clip"
+    );
+}
+
+#[tokio::test]
+async fn deleting_a_missing_clip_404s() {
+    let srv = start().await;
+    create_user(&srv.pool, "alice", "pw").await;
+    let c = client();
+    login(&srv, &c, "alice", "pw").await;
+
+    let r = c
+        .delete(format!("{}/clips/999", srv.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404);
+}
+
+#[tokio::test]
 async fn rename_succeeds_and_409s_on_conflict() {
     let srv = start().await;
     create_user(&srv.pool, "alice", "pw").await;

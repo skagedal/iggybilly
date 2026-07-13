@@ -1,8 +1,5 @@
 {% extends "base.html" %}
 {% block title %}Clips — iggybilly{% endblock %}
-{% block head %}
-<script src="https://unpkg.com/wavesurfer.js@7"></script>
-{% endblock %}
 {% block nav %}
   <span class="username">{{ username }}</span>
   <a href="/account">Account</a>
@@ -47,6 +44,7 @@
     <ul class="clip-list">
       {% for clip in clips %}
         <li class="clip-card" data-clip-id="{{ clip.id }}" data-audio-url="/clips/{{ clip.id }}/audio"
+            data-name="{{ clip.name }}" data-download-name="{{ clip.original_filename }}"
             {% if let Some(p) = clip.peaks %}data-peaks="{{ p|safe }}"{% endif %}
             {% if let Some(d) = clip.duration_seconds %}data-duration="{{ d }}"{% endif %}>
           <div class="clip-head">
@@ -57,7 +55,7 @@
             </span>
           </div>
           <div class="mini-player">
-            <button type="button" class="play">▶</button>
+            <button type="button" class="play" data-play data-play-icon>▶</button>
             <div class="waveform"></div>
             <span class="time">0:00</span>
             <a class="download" href="/clips/{{ clip.id }}/audio?download=1" download="{{ clip.original_filename }}" title="Download">⤓</a>
@@ -101,58 +99,43 @@
       // Assigning a FileList from the drop event is supported in current
       // Chrome/Firefox/Safari and lets the normal form POST carry them.
       input.files = files;
-      form.submit();
+      // requestSubmit (not submit) fires a submit event, so htmx's boost
+      // handles it and the global player survives the upload.
+      form.requestSubmit();
     });
   })();
 
-  // Draw each clip's waveform from precomputed peaks so it's visible
-  // before playing — no audio is downloaded until you hit play. Clips
-  // without peaks (older uploads, or formats we can't decode) fall back
-  // to the previous behaviour: download + decode lazily on first play.
-  const fmt = s => {
-    const m = Math.floor(s / 60);
-    const r = Math.floor(s % 60).toString().padStart(2, '0');
-    return `${m}:${r}`;
-  };
-
-  document.querySelectorAll('.clip-card').forEach(card => {
-    const url = card.dataset.audioUrl;
-    const wfEl = card.querySelector('.waveform');
-    const btn = card.querySelector('.play');
-    const timeEl = card.querySelector('.time');
-
-    let peaks = null;
-    try { peaks = card.dataset.peaks ? JSON.parse(card.dataset.peaks) : null; } catch (_) {}
-    const duration = parseFloat(card.dataset.duration || '0');
-
-    const base = { container: wfEl, waveColor: '#aaa', progressColor: '#3a7', height: 48 };
-    const wire = ws => {
-      ws.on('timeupdate', t => timeEl.textContent = fmt(t));
-      ws.on('play', () => { btn.textContent = '⏸'; });
-      ws.on('pause', () => { btn.textContent = '▶'; });
-      ws.on('finish', () => { btn.textContent = '▶'; });
+  // Draw each clip's waveform from precomputed peaks so it's visible at a
+  // glance. These previews are display-only — no audio is downloaded and
+  // clicking play routes to the global player (see base.html). Clips
+  // without peaks show an empty waveform box until played.
+  (() => {
+    const fmt = s => {
+      const m = Math.floor(s / 60);
+      const r = Math.floor(s % 60).toString().padStart(2, '0');
+      return `${m}:${r}`;
     };
 
-    let ws = null;
-    if (peaks && duration) {
-      // Own <audio preload=none> so the file isn't fetched until play.
-      const media = new Audio();
-      media.preload = 'none';
-      media.src = url;
-      ws = WaveSurfer.create({ ...base, media, peaks: [peaks], duration });
-      wire(ws);
-      btn.addEventListener('click', () => ws.playPause());
-    } else {
-      btn.addEventListener('click', () => {
-        if (!ws) {
-          ws = WaveSurfer.create({ ...base, url });
-          wire(ws);
-          ws.on('ready', () => ws.play());
-          return;
-        }
-        ws.playPause();
-      });
-    }
-  });
+    document.querySelectorAll('.clip-card').forEach(card => {
+      const wfEl = card.querySelector('.waveform');
+      const timeEl = card.querySelector('.time');
+
+      let peaks = null;
+      try { peaks = card.dataset.peaks ? JSON.parse(card.dataset.peaks) : null; } catch (_) {}
+      const duration = parseFloat(card.dataset.duration || '0');
+      if (timeEl) timeEl.textContent = fmt(duration || 0);
+
+      if (peaks && duration && wfEl) {
+        // preload=none + peaks means the waveform draws without any fetch.
+        const media = new Audio();
+        media.preload = 'none';
+        media.src = card.dataset.audioUrl;
+        WaveSurfer.create({
+          container: wfEl, waveColor: '#aaa', progressColor: '#3a7',
+          height: 48, media, peaks: [peaks], duration, interact: false,
+        });
+      }
+    });
+  })();
 </script>
 {% endblock %}

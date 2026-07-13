@@ -12,7 +12,10 @@ as a single container to `iggybilly.skagedal.tech`.
 - Each user can delete clips they uploaded (from the clip's own page);
   the row, its labels, and the audio file on disk all go with it. You
   can't delete someone else's clip.
-- Each clip has a waveform player (wavesurfer.js).
+- Each clip shows a waveform preview; pressing play sends it to a single
+  global player bar (wavesurfer.js) fixed to the bottom of the page.
+  Navigation is boosted (htmx) so the bar keeps playing as you move
+  around the site, and playing another clip takes over the bar.
 - Each clip can have any number of labels (lower-kebab-case, with
   Unicode letters allowed: `verse-1`, `pålägg`, `café-version`). Adding
   a label autocompletes against existing labels and offers to create a

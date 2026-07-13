@@ -5,6 +5,7 @@
   <form class="wiki-edit"
         hx-post="/labels/{{ label_id }}/wiki"
         hx-target="#wiki-{{ label_id }}"
+        hx-select="unset"
         hx-swap="outerHTML">
     <textarea name="content" rows="12" autofocus
               placeholder="Write this label's wiki page in Markdown… Link to another label with [[label-name]].">{{ content }}</textarea>
@@ -14,6 +15,7 @@
       <button type="button" class="link"
               hx-get="/labels/{{ label_id }}/wiki"
               hx-target="#wiki-{{ label_id }}"
+              hx-select="unset"
               hx-swap="outerHTML">Cancel</button>
     </div>
   </form>

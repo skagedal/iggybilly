@@ -6,17 +6,149 @@
   <title>{% block title %}iggybilly{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css">
   <script src="https://unpkg.com/htmx.org@2.0.4" crossorigin="anonymous"></script>
+  <!-- wavesurfer is loaded once here (not per page) because boosted
+       navigation only swaps #content and never re-runs the head block. -->
+  <script src="https://unpkg.com/wavesurfer.js@7"></script>
   {% block head %}{% endblock %}
 </head>
-<body>
-  <header>
-    <a class="logo" href="/">iggybilly</a>
-    <nav>
-      {% block nav %}{% endblock %}
-    </nav>
-  </header>
-  <main>
-    {% block content %}{% endblock %}
-  </main>
+<!-- hx-boost turns navigation into AJAX that swaps only #content, so the
+     global player below survives page changes. The hx-target/hx-select are
+     inherited by descendants; partial-swap forms/buttons (labels, rename,
+     wiki) cancel the inherited hx-select with hx-select="unset" so their
+     fragment responses aren't filtered through #content. -->
+<body hx-boost="true" hx-target="#content" hx-select="#content" hx-swap="innerHTML">
+  <div id="content">
+    <header>
+      <a class="logo" href="/">iggybilly</a>
+      <nav>
+        {% block nav %}{% endblock %}
+      </nav>
+    </header>
+    <main>
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+
+  <!-- The one global player. Lives outside #content so its DOM node,
+       wavesurfer instance and playing audio persist across navigation. -->
+  <div id="global-player" hidden>
+    <button type="button" id="gp-play" aria-label="Play / pause">▶</button>
+    <div id="gp-waveform"></div>
+    <a id="gp-name" class="gp-name" href="/"></a>
+    <span id="gp-time">0:00</span>
+    <a id="gp-download" class="gp-download" href="#" title="Download" download>⤓</a>
+  </div>
+
+  <script>
+    // Global player controller. Defined once, never re-run on navigation
+    // (this <script> is outside #content). Any play button on any page —
+    // now or after a boosted swap — routes here via event delegation.
+    (function () {
+      const bar = document.getElementById('global-player');
+      const playBtn = document.getElementById('gp-play');
+      const wfEl = document.getElementById('gp-waveform');
+      const timeEl = document.getElementById('gp-time');
+      const nameEl = document.getElementById('gp-name');
+      const dlEl = document.getElementById('gp-download');
+
+      const fmt = s => {
+        const m = Math.floor(s / 60);
+        const r = Math.floor(s % 60).toString().padStart(2, '0');
+        return `${m}:${r}`;
+      };
+
+      let ws = null;
+      let currentId = null;
+
+      // Tell the page which clip is loaded and whether it's playing, so
+      // any on-page play buttons can show ⏸ / ▶ for the right clip.
+      const emit = playing => document.dispatchEvent(
+        new CustomEvent('iggy:state', { detail: { clipId: currentId, playing } }));
+
+      const wire = w => {
+        w.on('timeupdate', t => timeEl.textContent = fmt(t));
+        w.on('play', () => { playBtn.textContent = '⏸'; emit(true); });
+        w.on('pause', () => { playBtn.textContent = '▶'; emit(false); });
+        w.on('finish', () => { playBtn.textContent = '▶'; emit(false); });
+      };
+
+      playBtn.addEventListener('click', () => { if (ws) ws.playPause(); });
+
+      // Load a clip into the bar and take over playback. `o` carries the
+      // clip's id, name, urls and (optionally) precomputed peaks+duration.
+      window.iggyPlay = function (o) {
+        // Re-clicking the current clip just toggles it.
+        if (o.id === currentId && ws) { ws.playPause(); return; }
+
+        currentId = o.id;
+        if (ws) { ws.destroy(); ws = null; }
+
+        nameEl.textContent = o.name;
+        nameEl.href = o.clipHref;
+        // htmx captures a boosted anchor's href when it processes the node,
+        // so re-process after changing it or the bar link would navigate to
+        // its stale initial href (a full reload that resets the player).
+        if (window.htmx) htmx.process(nameEl);
+        dlEl.href = o.downloadUrl;
+        if (o.downloadName) dlEl.setAttribute('download', o.downloadName);
+        timeEl.textContent = fmt(0);
+        bar.hidden = false;
+        document.body.classList.add('has-player');
+
+        const base = { container: wfEl, waveColor: '#aaa', progressColor: '#2a8055', height: 40 };
+        if (o.peaks && o.duration) {
+          // Render instantly from peaks; only now fetch the audio to play.
+          const media = new Audio();
+          media.preload = 'none';
+          media.src = o.audioUrl;
+          ws = WaveSurfer.create({ ...base, media, peaks: [o.peaks], duration: o.duration });
+          wire(ws);
+          ws.play();
+        } else {
+          // No peaks (older upload / undecodable): download + decode, then play.
+          ws = WaveSurfer.create({ ...base, url: o.audioUrl });
+          wire(ws);
+          ws.on('ready', () => ws.play());
+        }
+      };
+
+      // Read a clip's data off the nearest element carrying data-audio-url.
+      window.iggyPlayEl = function (el) {
+        const id = el.dataset.clipId;
+        let peaks = null;
+        try { peaks = el.dataset.peaks ? JSON.parse(el.dataset.peaks) : null; } catch (_) {}
+        window.iggyPlay({
+          id,
+          name: el.dataset.name || 'clip',
+          audioUrl: el.dataset.audioUrl,
+          clipHref: '/clips/' + id,
+          downloadUrl: '/clips/' + id + '/audio?download=1',
+          downloadName: el.dataset.downloadName || '',
+          peaks,
+          duration: parseFloat(el.dataset.duration || '0'),
+        });
+      };
+
+      // Delegated: any [data-play] button routes to the global player,
+      // reading the clip data from its enclosing [data-audio-url] element.
+      document.addEventListener('click', e => {
+        const btn = e.target.closest('[data-play]');
+        if (!btn) return;
+        const src = btn.closest('[data-audio-url]');
+        if (!src) return;
+        e.preventDefault();
+        window.iggyPlayEl(src);
+      });
+
+      // Reflect play state on icon-style triggers (the list ▶ buttons).
+      document.addEventListener('iggy:state', e => {
+        document.querySelectorAll('[data-play-icon]').forEach(btn => {
+          const card = btn.closest('[data-clip-id]');
+          const mine = card && card.dataset.clipId === e.detail.clipId;
+          btn.textContent = (mine && e.detail.playing) ? '⏸' : '▶';
+        });
+      });
+    })();
+  </script>
 </body>
 </html>

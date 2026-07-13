@@ -1,8 +1,5 @@
 {% extends "base.html" %}
 {% block title %}{{ name }} — iggybilly{% endblock %}
-{% block head %}
-<script src="https://unpkg.com/wavesurfer.js@7"></script>
-{% endblock %}
 {% block nav %}
   <span class="username">{{ username }}</span>
   <a href="/">Clips</a>
@@ -19,13 +16,19 @@
     <span class="orig">{{ original_filename }}</span> ({{ content_type }})
   </p>
 
-  <div id="waveform" data-audio-url="/clips/{{ clip_id }}/audio"
+  <div class="clip-player"
+       data-clip-id="{{ clip_id }}"
+       data-audio-url="/clips/{{ clip_id }}/audio"
+       data-name="{{ name }}"
+       data-download-name="{{ original_filename }}"
        {% if let Some(p) = peaks %}data-peaks="{{ p|safe }}"{% endif %}
-       {% if let Some(d) = duration_seconds %}data-duration="{{ d }}"{% endif %}></div>
-  <div class="player-controls">
-    <button id="play">Play / Pause</button>
-    <span id="time">0:00</span>
-    <a class="download" href="/clips/{{ clip_id }}/audio?download=1" download="{{ original_filename }}">Download</a>
+       {% if let Some(d) = duration_seconds %}data-duration="{{ d }}"{% endif %}>
+    <div id="waveform"></div>
+    <div class="player-controls">
+      <button id="play" type="button" data-play>Play / Pause</button>
+      <span id="time">0:00</span>
+      <a class="download" href="/clips/{{ clip_id }}/audio?download=1" download="{{ original_filename }}">Download</a>
+    </div>
   </div>
 
   <h2>Labels</h2>
@@ -36,6 +39,7 @@
   <form class="label-add"
         hx-post="/clips/{{ clip_id }}/labels"
         hx-target="#labels"
+        hx-select="unset"
         hx-swap="innerHTML">
     <label>Add a label
       <input name="name"
@@ -43,6 +47,7 @@
              hx-get="/labels/search"
              hx-trigger="focus, keyup changed delay:150ms"
              hx-target="#label-suggestions"
+             hx-select="unset"
              hx-include="[name=name]"
              hx-vals='{"clip_id": "{{ clip_id }}"}'>
     </label>
@@ -52,10 +57,15 @@
 </section>
 
 <script>
+  // Draw the waveform preview from peaks (no audio fetched). Playback is
+  // owned by the global player (base.html); the Play button carries
+  // data-play and routes there via delegation.
   (function () {
+    const src = document.querySelector('.clip-player');
     const el = document.getElementById('waveform');
-    const url = el.dataset.audioUrl;
     const time = document.getElementById('time');
+    if (!src || !el) return;
+
     const fmt = s => {
       const m = Math.floor(s / 60);
       const r = Math.floor(s % 60).toString().padStart(2, '0');
@@ -63,24 +73,19 @@
     };
 
     let peaks = null;
-    try { peaks = el.dataset.peaks ? JSON.parse(el.dataset.peaks) : null; } catch (_) {}
-    const duration = parseFloat(el.dataset.duration || '0');
+    try { peaks = src.dataset.peaks ? JSON.parse(src.dataset.peaks) : null; } catch (_) {}
+    const duration = parseFloat(src.dataset.duration || '0');
+    time.textContent = fmt(duration || 0);
 
-    const base = { container: el, waveColor: '#888', progressColor: '#3a7', height: 96 };
-    let ws;
     if (peaks && duration) {
-      // Draw from precomputed peaks; don't fetch audio until play.
       const media = new Audio();
       media.preload = 'none';
-      media.src = url;
-      ws = WaveSurfer.create({ ...base, media, peaks: [peaks], duration });
-      time.textContent = fmt(0);
-    } else {
-      ws = WaveSurfer.create({ ...base, url });
-      ws.on('ready', () => time.textContent = fmt(0));
+      media.src = src.dataset.audioUrl;
+      WaveSurfer.create({
+        container: el, waveColor: '#888', progressColor: '#3a7',
+        height: 96, media, peaks: [peaks], duration, interact: false,
+      });
     }
-    document.getElementById('play').addEventListener('click', () => ws.playPause());
-    ws.on('timeupdate', t => time.textContent = fmt(t));
   })();
 
   // Clicking a suggestion fills the input and submits.

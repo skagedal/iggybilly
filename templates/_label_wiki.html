@@ -5,6 +5,7 @@
       <button type="button" class="link"
               hx-get="/labels/{{ label_id }}/wiki/edit"
               hx-target="#wiki-{{ label_id }}"
+              hx-select="unset"
               hx-swap="outerHTML">Edit wiki</button>
       <a href="/labels/{{ label_id }}/wiki/history">History</a>
     </span>
@@ -18,6 +19,7 @@
       <button type="button" class="link"
               hx-get="/labels/{{ label_id }}/wiki/edit"
               hx-target="#wiki-{{ label_id }}"
+              hx-select="unset"
               hx-swap="outerHTML">Write one</button>
     </p>
   {% endif %}

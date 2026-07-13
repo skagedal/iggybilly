@@ -1,6 +1,7 @@
 <form id="clip-header" class="clip-header rename-form"
       hx-post="/clips/{{ clip_id }}/name"
       hx-target="#clip-header"
+      hx-select="unset"
       hx-swap="outerHTML"
       hx-on::after-request="if (event.detail.xhr.status === 409) document.getElementById('rename-error').textContent = event.detail.xhr.responseText;">
   <input name="name" value="{{ name }}" autofocus required>
@@ -9,6 +10,7 @@
           class="link"
           hx-get="/clips/{{ clip_id }}/name/display"
           hx-target="#clip-header"
+          hx-select="unset"
           hx-swap="outerHTML">Cancel</button>
   <span id="rename-error" class="error"></span>
 </form>

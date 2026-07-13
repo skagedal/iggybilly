@@ -5,6 +5,7 @@
       <button class="remove"
               hx-delete="/clips/{{ clip_id }}/labels/{{ l.id }}"
               hx-target="#labels"
+              hx-select="unset"
               hx-swap="innerHTML"
               title="Remove label">×</button>
     </li>

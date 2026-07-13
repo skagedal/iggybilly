@@ -342,3 +342,70 @@ a.label:hover { filter: brightness(0.92); text-decoration: underline; }
 }
 .player-controls .download:hover { background: var(--accent); color: white; }
 #time { color: var(--muted); font-family: ui-monospace, monospace; }
+
+/* Global player: a fixed bar that persists across navigation. Lives
+   outside #content (see base.html) so playback survives page changes. */
+#global-player {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+  background: var(--card);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.06);
+  z-index: 50;
+}
+/* The [hidden] attribute must beat display:flex above, hence the id
+   qualifier for equal-plus-one specificity. */
+#global-player[hidden] { display: none; }
+/* Leave room so the bar never covers the last row of content. */
+body.has-player { padding-bottom: 5rem; }
+
+#gp-play {
+  flex: 0 0 auto;
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 1rem;
+}
+#gp-waveform {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 40px;
+}
+.gp-name {
+  flex: 0 1 auto;
+  max-width: 16rem;
+  color: var(--fg);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gp-name:hover { text-decoration: underline; }
+#gp-time {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+  min-width: 3.5rem;
+  text-align: right;
+}
+.gp-download {
+  flex: 0 0 auto;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 1.3rem;
+  padding: 0 0.25rem;
+}
+.gp-download:hover { color: var(--accent); }
+
+@media (max-width: 480px) {
+  .gp-name { display: none; }
+}

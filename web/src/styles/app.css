@@ -95,6 +95,7 @@ button {
 }
 
 button:hover { filter: brightness(0.95); }
+button:disabled { opacity: 0.6; cursor: default; filter: none; }
 
 .error { color: var(--error); }
 .success { color: var(--success); }
@@ -116,6 +117,7 @@ button:hover { filter: brightness(0.95); }
 }
 .dropzone label { margin-bottom: 0; flex: 1 1 220px; }
 .hint { color: var(--muted); font-size: 0.85rem; flex-basis: 100%; margin: 0.25rem 0 0; }
+.dropzone .error { flex-basis: 100%; font-size: 0.9rem; margin: 0.25rem 0 0; }
 
 /* Label wiki pages */
 .label-wikis { margin: 1rem 0 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
@@ -214,12 +216,15 @@ button:hover { filter: brightness(0.95); }
   border-radius: 50%;
   font-size: 1rem;
 }
-.mini-player .waveform {
-  flex: 1 1 auto;
+/* Waveforms are canvases now, sized by CSS width and a height prop. */
+canvas.waveform {
+  display: block;
+  width: 100%;
   background: #f0f0f0;
   border-radius: 4px;
-  min-height: 48px;
 }
+canvas.waveform.seekable { cursor: pointer; }
+.mini-player canvas.waveform { flex: 1 1 auto; min-width: 0; }
 .mini-player .time {
   flex: 0 0 auto;
   color: var(--muted);
@@ -312,6 +317,7 @@ a.label:hover { filter: brightness(0.92); text-decoration: underline; }
   margin-top: 1rem;
   max-width: 340px;
 }
+.label-add .error { font-size: 0.85rem; margin: 0.5rem 0 0; }
 .suggestions {
   list-style: none;
   padding: 0;
@@ -335,12 +341,9 @@ a.label:hover { filter: brightness(0.92); text-decoration: underline; }
 .suggestions .create button { color: var(--accent); font-style: italic; }
 .suggestions button:hover { background: #f0f4f2; }
 
-#waveform {
-  background: #f0f0f0;
-  border-radius: 6px;
-  margin: 1rem 0;
-}
+.clip-waveform { margin: 1rem 0; }
 .player-controls { display: flex; gap: 1rem; align-items: center; }
+.clip-time { color: var(--muted); font-family: ui-monospace, monospace; }
 .player-controls .download {
   margin-left: auto;
   color: var(--accent);
@@ -351,4 +354,91 @@ a.label:hover { filter: brightness(0.92); text-decoration: underline; }
   padding: 0.2rem 0.6rem;
 }
 .player-controls .download:hover { background: var(--accent); color: white; }
-#time { color: var(--muted); font-family: ui-monospace, monospace; }
+
+/* --------------------------------------------------------------------
+   The global player bar.
+
+   Mounted above the router's outlet and never unmounted, so its
+   wavesurfer instance and playing audio survive navigation. Hidden
+   rather than removed when nothing is loaded, so the waveform container
+   stays the same DOM node throughout.
+   -------------------------------------------------------------------- */
+.global-player {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+  background: var(--card);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.06);
+  z-index: 50;
+}
+/* [hidden] has to beat the display:flex above, hence the extra class. */
+.global-player[hidden] { display: none; }
+/* Keep the bar from covering the last row of content. */
+body.has-player { padding-bottom: 5rem; }
+
+.gp-play {
+  flex: 0 0 auto;
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 1rem;
+}
+.gp-waveform { flex: 1 1 auto; min-width: 0; min-height: 40px; }
+.gp-name {
+  flex: 0 1 auto;
+  max-width: 16rem;
+  color: var(--fg);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gp-name:hover { text-decoration: underline; }
+.gp-time {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+  min-width: 3.5rem;
+  text-align: right;
+}
+.gp-download {
+  flex: 0 0 auto;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 1.3rem;
+  padding: 0 0.25rem;
+}
+.gp-download:hover { color: var(--accent); }
+
+@media (max-width: 480px) {
+  .gp-name { display: none; }
+}
+
+/* Thin bar across the top while a client navigation is in flight. It
+   only appears if the fetch outlasts the delay, so a fast local
+   navigation doesn't flash it. */
+.nav-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 2px;
+  width: 100%;
+  background: var(--accent);
+  transform-origin: 0 50%;
+  animation: nav-progress 2s ease-out both;
+  animation-delay: 150ms;
+  z-index: 100;
+}
+@keyframes nav-progress {
+  from { transform: scaleX(0); opacity: 1; }
+  to { transform: scaleX(0.9); opacity: 1; }
+}

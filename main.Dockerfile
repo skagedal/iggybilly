@@ -1,5 +1,21 @@
-# Two-stage build: compile a release binary, then copy it into a slim
-# Debian image with just the SQLite + TLS runtime libs we link against.
+# Three-stage build: bundle the frontend, compile a release binary, then
+# copy both into a slim Debian image with just the SQLite + TLS runtime
+# libs we link against.
+
+# UPGRADE_POINT
+FROM node:24-bookworm-slim AS frontend
+
+WORKDIR /web
+
+# Deps first so a source-only change doesn't re-run the install.
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+
+COPY web/ ./
+# build.mjs writes to ../static/dist, i.e. /static/dist in this stage,
+# together with the manifest.json the server reads to resolve the hashed
+# filenames.
+RUN npm run build
 
 # UPGRADE_POINT
 FROM rust:1.90-slim-bookworm AS build
@@ -22,9 +38,9 @@ RUN mkdir src && echo 'fn main(){}' > src/main.rs \
 
 COPY src ./src
 COPY migrations ./migrations
-# Askama compiles templates at build time (the #[template(path = ...)]
-# macro reads templates/ relative to the crate root), so they must be
-# present before `cargo build`, not just in the runtime stage.
+# Askama compiles the page shell at build time (the #[template(path =
+# ...)] macro reads templates/ relative to the crate root), so it must be
+# present before `cargo build`.
 COPY templates ./templates
 RUN cargo build --locked --release
 
@@ -38,8 +54,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /build/target/release/iggybilly /app/iggybilly
-COPY templates ./templates
-COPY static ./static
+# Bundles + manifest.json, served at /static. The binary reads
+# static/dist/manifest.json at startup, relative to this WORKDIR.
+COPY --from=frontend /static ./static
 
 ENV IGGYBILLY_DATA_DIR=/var/lib/iggybilly
 ENV IGGYBILLY_LISTEN_ADDR=0.0.0.0:9020

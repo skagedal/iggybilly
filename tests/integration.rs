@@ -3,6 +3,12 @@
 //! real HTTP with reqwest. That's heavier than oneshot-against-the-
 //! router but lets us exercise the session cookie path, multipart
 //! upload, redirects, and 409 responses exactly as a browser would.
+//!
+//! Page routes return an HTML shell whose only interesting content is
+//! the JSON props blob the React bundle reads, so assertions about what
+//! a page shows go through [`page_envelope`] rather than matching markup.
+//! No frontend build is needed: the asset manifest is optional, and the
+//! shell falls back to unhashed bundle URLs without it.
 
 use std::sync::Arc;
 
@@ -36,6 +42,10 @@ async fn start_with(discord_webhook_url: Option<String>, base_url: Option<String
         data_dir: data_dir.clone(),
         db_path: db_path.clone(),
         audio_dir,
+        // Point away from the real build output so the tests assert on
+        // the no-manifest fallback regardless of whether this checkout
+        // has run `npm run build`.
+        static_dir: data_dir.join("static"),
         // Tests speak plain HTTP to 127.0.0.1; the Secure flag would
         // make reqwest's cookie store drop the session cookie.
         secure_cookies: false,
@@ -86,27 +96,48 @@ async fn create_user(pool: &sqlx::SqlitePool, username: &str, password: &str) {
 
 async fn login(srv: &Server, c: &reqwest::Client, user: &str, pass: &str) {
     let r = c
-        .post(format!("{}/login", srv.base))
-        .form(&[("username", user), ("password", pass)])
+        .post(format!("{}/api/login", srv.base))
+        .json(&serde_json::json!({ "username": user, "password": pass }))
         .send()
         .await
         .unwrap();
-    assert_eq!(r.status(), 303, "login should redirect on success");
+    assert_eq!(r.status(), 204, "login should succeed");
+}
+
+/// Fetch a page as a browser would and return just its props.
+async fn get_props(srv: &Server, c: &reqwest::Client, path: &str) -> serde_json::Value {
+    let r = c.get(format!("{}{path}", srv.base)).send().await.unwrap();
+    assert_eq!(r.status(), 200, "GET {path} should render a page");
+    page_envelope(&r.text().await.unwrap())["props"].clone()
+}
+
+/// Fetch a page the way the client router does, and return the envelope
+/// it gets back — no HTML involved.
+async fn get_envelope(srv: &Server, c: &reqwest::Client, path: &str) -> serde_json::Value {
+    let r = c
+        .get(format!("{}{path}", srv.base))
+        .header("accept", "application/json")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200, "GET {path} should answer the router");
+    r.json().await.unwrap()
+}
+
+/// Pull the `{entry, title, props}` envelope out of a rendered shell.
+///
+/// The server writes every `<` in the JSON as `<` so the payload
+/// can't close the script element; serde_json turns those back into real
+/// characters, exactly as the browser's JSON.parse does.
+fn page_envelope(html: &str) -> serde_json::Value {
+    const OPEN: &str = r#"<script id="page-data" type="application/json">"#;
+    let start = html.find(OPEN).expect("page shell should carry data") + OPEN.len();
+    let end = start + html[start..].find("</script>").expect("unclosed data");
+    serde_json::from_str(&html[start..end]).expect("page data should be valid JSON")
 }
 
 async fn upload_one(srv: &Server, c: &reqwest::Client, filename: &str) {
-    let part = reqwest::multipart::Part::bytes(b"fake-audio-bytes".to_vec())
-        .file_name(filename.to_string())
-        .mime_str("audio/mpeg")
-        .unwrap();
-    let form = reqwest::multipart::Form::new().part("audio", part);
-    let r = c
-        .post(format!("{}/clips", srv.base))
-        .multipart(form)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(r.status(), 303);
+    upload_many(srv, c, &[filename]).await;
 }
 
 /// Post several files in one request, each as its own "audio" part —
@@ -121,18 +152,18 @@ async fn upload_many(srv: &Server, c: &reqwest::Client, filenames: &[&str]) {
         form = form.part("audio", part);
     }
     let r = c
-        .post(format!("{}/clips", srv.base))
+        .post(format!("{}/api/clips", srv.base))
         .multipart(form)
         .send()
         .await
         .unwrap();
-    assert_eq!(r.status(), 303);
+    assert_eq!(r.status(), 200);
 }
 
 async fn add_label(srv: &Server, c: &reqwest::Client, clip_id: i64, name: &str) {
     let r = c
-        .post(format!("{}/clips/{clip_id}/labels", srv.base))
-        .form(&[("name", name)])
+        .post(format!("{}/api/clips/{clip_id}/labels", srv.base))
+        .json(&serde_json::json!({ "name": name }))
         .send()
         .await
         .unwrap();
@@ -156,7 +187,67 @@ async fn login_with_correct_password_grants_access() {
 
     let r = c.get(format!("{}/", srv.base)).send().await.unwrap();
     assert_eq!(r.status(), 200);
-    assert!(r.text().await.unwrap().contains("Upload"));
+    let html = r.text().await.unwrap();
+    // Every page boots the same entry; which module it then loads comes
+    // from the envelope's "entry". Tests point static_dir at an empty
+    // directory, so this is the no-manifest fallback URL.
+    assert!(
+        html.contains(r#"src="/static/dist/main.js""#),
+        "got: {html}"
+    );
+    let envelope = page_envelope(&html);
+    assert_eq!(envelope["entry"], "index");
+    assert_eq!(envelope["title"], "Clips — iggybilly");
+    assert_eq!(envelope["props"]["username"], "alice");
+}
+
+/// The client router asks for the same URLs with Accept: application/
+/// json and gets the envelope alone. Same handler, same data — only the
+/// wrapper differs, which is what lets navigation swap a page without
+/// tearing down the document (and the playing audio with it).
+#[tokio::test]
+async fn pages_serve_json_to_the_client_router() {
+    let srv = start().await;
+    create_user(&srv.pool, "alice", "pw").await;
+    let c = client();
+    login(&srv, &c, "alice", "pw").await;
+    upload_one(&srv, &c, "Riff.mp3").await;
+
+    for (path, entry) in [
+        ("/", "index"),
+        ("/clips/1", "clip"),
+        ("/account", "account"),
+    ] {
+        let envelope = get_envelope(&srv, &c, path).await;
+        assert_eq!(envelope["entry"], entry, "wrong entry for {path}");
+        assert!(
+            envelope["title"].as_str().unwrap().contains("iggybilly"),
+            "{path} should carry a document title"
+        );
+        assert_eq!(envelope["props"]["username"], "alice");
+    }
+
+    // And the browser's own Accept header still gets the full shell.
+    let r = c.get(format!("{}/clips/1", srv.base)).send().await.unwrap();
+    let html = r.text().await.unwrap();
+    assert!(html.starts_with("<!doctype html>"));
+    assert_eq!(page_envelope(&html)["entry"], "clip");
+}
+
+/// An expired session has to reach the browser as a redirect even on a
+/// router fetch, so the client can tell it needs a real navigation to
+/// /login rather than rendering a page in place.
+#[tokio::test]
+async fn router_fetch_without_a_session_redirects() {
+    let srv = start().await;
+    let r = client()
+        .get(format!("{}/", srv.base))
+        .header("accept", "application/json")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 303);
+    assert_eq!(r.headers().get("location").unwrap(), "/login");
 }
 
 #[tokio::test]
@@ -165,18 +256,14 @@ async fn login_with_wrong_password_fails() {
     create_user(&srv.pool, "alice", "right").await;
     let c = client();
     let r = c
-        .post(format!("{}/login", srv.base))
-        .form(&[("username", "alice"), ("password", "wrong")])
+        .post(format!("{}/api/login", srv.base))
+        .json(&serde_json::json!({ "username": "alice", "password": "wrong" }))
         .send()
         .await
         .unwrap();
-    // Re-renders the login form with an error rather than redirecting.
-    assert_eq!(r.status(), 200);
-    assert!(r
-        .text()
-        .await
-        .unwrap()
-        .contains("Invalid username or password"));
+    assert_eq!(r.status(), 401);
+    let body: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(body["error"], "Invalid username or password.");
 }
 
 #[tokio::test]
@@ -233,24 +320,27 @@ async fn label_wiki_saves_renders_history_and_restores() {
 
     // Save a wiki page; the <script> must be neutralised in the render.
     let r = c
-        .post(format!("{}/labels/{label_id}/wiki", srv.base))
-        .form(&[(
-            "content",
-            "# Verse\n\nLyrics **here** <script>alert(1)</script>",
-        )])
+        .post(format!("{}/api/labels/{label_id}/wiki", srv.base))
+        .json(&serde_json::json!({
+            "content": "# Verse\n\nLyrics **here** <script>alert(1)</script>",
+        }))
         .send()
         .await
         .unwrap();
     assert_eq!(r.status(), 200);
-    let body = r.text().await.unwrap();
+    let saved: serde_json::Value = r.json().await.unwrap();
+    let html = saved["contentHtml"].as_str().unwrap();
+    assert!(html.contains("<strong>here</strong>"), "markdown renders");
+    assert!(!html.contains("<script>"), "raw HTML must be stripped");
     assert!(
-        body.contains("<strong>here</strong>"),
-        "markdown should render"
+        saved["content"].as_str().unwrap().starts_with("# Verse"),
+        "the raw source comes back too, for the editor"
     );
-    assert!(!body.contains("<script>"), "raw HTML must be stripped");
 
-    // The filtered clip list shows the rendered wiki above the clips.
-    let idx = c
+    // The filtered clip list carries the rendered wiki in its props. The
+    // markup is escaped on the way into the <script> block, so a literal
+    // "<h1>" in the document would mean the escaping had failed.
+    let raw = c
         .get(format!("{}/?label=verse", srv.base))
         .send()
         .await
@@ -258,12 +348,21 @@ async fn label_wiki_saves_renders_history_and_restores() {
         .text()
         .await
         .unwrap();
-    assert!(idx.contains(r#"class="label-wiki""#));
-    assert!(idx.contains("<h1>Verse</h1>"));
+    assert!(
+        !raw.contains("<h1>Verse</h1>"),
+        "wiki HTML must be escaped inside the props script block"
+    );
+    let idx = page_envelope(&raw)["props"].clone();
+    let wiki = &idx["activeWikis"][0];
+    assert_eq!(wiki["labelName"], "verse");
+    assert!(wiki["contentHtml"]
+        .as_str()
+        .unwrap()
+        .contains("<h1>Verse</h1>"));
 
     // A second edit appends a revision rather than overwriting.
-    c.post(format!("{}/labels/{label_id}/wiki", srv.base))
-        .form(&[("content", "# Verse v2")])
+    c.post(format!("{}/api/labels/{label_id}/wiki", srv.base))
+        .json(&serde_json::json!({ "content": "# Verse v2" }))
         .send()
         .await
         .unwrap();
@@ -275,17 +374,13 @@ async fn label_wiki_saves_renders_history_and_restores() {
             .unwrap();
     assert_eq!(count, 2, "each save is a new revision");
 
-    // History lists revisions, with the newest marked current.
-    let hist = c
-        .get(format!("{}/labels/{label_id}/wiki/history", srv.base))
-        .send()
-        .await
-        .unwrap()
-        .text()
-        .await
-        .unwrap();
-    assert!(hist.contains("Restore this version"));
-    assert!(hist.contains("rev-current"));
+    // History lists revisions newest first, with the newest marked
+    // current so only the older ones offer a restore.
+    let hist = get_props(&srv, &c, &format!("/labels/{label_id}/wiki/history")).await;
+    let revisions = hist["revisions"].as_array().unwrap();
+    assert_eq!(revisions.len(), 2);
+    assert_eq!(revisions[0]["isCurrent"], true);
+    assert_eq!(revisions[1]["isCurrent"], false);
 
     // Restoring the oldest revision appends it as a new (third) revision.
     let (oldest,): (i64,) =
@@ -296,13 +391,13 @@ async fn label_wiki_saves_renders_history_and_restores() {
             .unwrap();
     let r = c
         .post(format!(
-            "{}/labels/{label_id}/wiki/restore/{oldest}",
+            "{}/api/labels/{label_id}/wiki/restore/{oldest}",
             srv.base
         ))
         .send()
         .await
         .unwrap();
-    assert_eq!(r.status(), 303, "restore redirects back to history");
+    assert_eq!(r.status(), 204);
     let (count, latest): (i64, String) = sqlx::query_as(
         "SELECT (SELECT count(*) FROM label_wiki_revisions WHERE label_id = ?1),
                 (SELECT content FROM label_wiki_revisions WHERE label_id = ?1 ORDER BY id DESC LIMIT 1)",
@@ -337,13 +432,11 @@ async fn uploader_can_delete_own_clip_and_bytes_are_removed() {
     assert!(audio_path.exists(), "audio file should exist before delete");
 
     let r = c
-        .delete(format!("{}/clips/1", srv.base))
+        .delete(format!("{}/api/clips/1", srv.base))
         .send()
         .await
         .unwrap();
-    assert_eq!(r.status(), 200);
-    // HTMX is told to navigate back to the clip list.
-    assert_eq!(r.headers().get("hx-redirect").unwrap(), "/");
+    assert_eq!(r.status(), 204);
 
     // Row is gone, its label link is gone (ON DELETE CASCADE), and so
     // are the bytes on disk.
@@ -378,7 +471,7 @@ async fn cannot_delete_another_users_clip() {
     let bob = client();
     login(&srv, &bob, "bob", "pw").await;
     let r = bob
-        .delete(format!("{}/clips/1", srv.base))
+        .delete(format!("{}/api/clips/1", srv.base))
         .send()
         .await
         .unwrap();
@@ -390,31 +483,12 @@ async fn cannot_delete_another_users_clip() {
         .unwrap();
     assert_eq!(clips, 1, "clip must survive a forbidden delete");
 
-    // Bob's own detail page shows no delete control; alice's does.
-    let bob_view = bob
-        .get(format!("{}/clips/1", srv.base))
-        .send()
-        .await
-        .unwrap()
-        .text()
-        .await
-        .unwrap();
-    assert!(
-        !bob_view.contains("hx-delete"),
-        "bob shouldn't see a delete button on alice's clip"
-    );
-    let alice_view = alice
-        .get(format!("{}/clips/1", srv.base))
-        .send()
-        .await
-        .unwrap()
-        .text()
-        .await
-        .unwrap();
-    assert!(
-        alice_view.contains("hx-delete"),
-        "alice should see a delete button on her own clip"
-    );
+    // Bob's copy of the page is told not to render a delete control;
+    // alice's is. The 403 above is what actually enforces it.
+    let bob_view = get_props(&srv, &bob, "/clips/1").await;
+    assert_eq!(bob_view["clip"]["canDelete"], false);
+    let alice_view = get_props(&srv, &alice, "/clips/1").await;
+    assert_eq!(alice_view["clip"]["canDelete"], true);
 }
 
 #[tokio::test]
@@ -425,7 +499,7 @@ async fn deleting_a_missing_clip_404s() {
     login(&srv, &c, "alice", "pw").await;
 
     let r = c
-        .delete(format!("{}/clips/999", srv.base))
+        .delete(format!("{}/api/clips/999", srv.base))
         .send()
         .await
         .unwrap();
@@ -443,21 +517,24 @@ async fn rename_succeeds_and_409s_on_conflict() {
     upload_one(&srv, &c, "Take.mp3").await;
 
     let r = c
-        .post(format!("{}/clips/1/name", srv.base))
-        .form(&[("name", "Fresh")])
+        .post(format!("{}/api/clips/1/name", srv.base))
+        .json(&serde_json::json!({ "name": "Fresh" }))
         .send()
         .await
         .unwrap();
     assert_eq!(r.status(), 200);
+    let body: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(body["name"], "Fresh");
 
     let r = c
-        .post(format!("{}/clips/2/name", srv.base))
-        .form(&[("name", "Fresh")])
+        .post(format!("{}/api/clips/2/name", srv.base))
+        .json(&serde_json::json!({ "name": "Fresh" }))
         .send()
         .await
         .unwrap();
     assert_eq!(r.status(), 409);
-    assert!(r.text().await.unwrap().contains("already exists"));
+    let body: serde_json::Value = r.json().await.unwrap();
+    assert!(body["error"].as_str().unwrap().contains("already exists"));
 }
 
 #[tokio::test]
@@ -470,8 +547,8 @@ async fn add_label_accepts_valid_and_normalises_case() {
 
     for input in ["verse-1", "Chorus", "pålägg"] {
         let r = c
-            .post(format!("{}/clips/1/labels", srv.base))
-            .form(&[("name", input)])
+            .post(format!("{}/api/clips/1/labels", srv.base))
+            .json(&serde_json::json!({ "name": input }))
             .send()
             .await
             .unwrap();
@@ -498,8 +575,8 @@ async fn add_label_rejects_invalid_shapes() {
 
     for bad in ["verse 1", "verse_1", "--verse", "verse-", "verse.1", ""] {
         let r = c
-            .post(format!("{}/clips/1/labels", srv.base))
-            .form(&[("name", bad)])
+            .post(format!("{}/api/clips/1/labels", srv.base))
+            .json(&serde_json::json!({ "name": bad }))
             .send()
             .await
             .unwrap();
@@ -530,34 +607,24 @@ async fn filter_by_labels_uses_and_semantics() {
     add_label(&srv, &c, 2, "chorus").await;
     add_label(&srv, &c, 3, "chorus").await;
 
-    let body = c
-        .get(format!("{}/?label=verse", srv.base))
-        .send()
-        .await
-        .unwrap()
-        .text()
-        .await
-        .unwrap();
+    let props = get_props(&srv, &c, "/?label=verse").await;
     assert_eq!(
-        body.matches(r#"class="clip-name""#).count(),
+        props["clips"].as_array().unwrap().len(),
         2,
         "?label=verse should match 2 clips"
     );
 
-    let body = c
-        .get(format!("{}/?label=verse&label=chorus", srv.base))
-        .send()
-        .await
-        .unwrap()
-        .text()
-        .await
-        .unwrap();
+    let props = get_props(&srv, &c, "/?label=verse&label=chorus").await;
+    let clips = props["clips"].as_array().unwrap();
     assert_eq!(
-        body.matches(r#"class="clip-name""#).count(),
+        clips.len(),
         1,
         "?label=verse&label=chorus (AND) should match exactly 1 clip"
     );
-    assert!(body.contains(">two<"), "the AND match should be clip 'two'");
+    assert_eq!(
+        clips[0]["name"], "two",
+        "the AND match should be clip 'two'"
+    );
 }
 
 #[tokio::test]
@@ -570,19 +637,20 @@ async fn label_autocomplete_returns_recent_for_empty_query() {
     add_label(&srv, &c, 1, "verse").await;
     add_label(&srv, &c, 1, "chorus").await;
 
-    let body = c
-        .get(format!("{}/labels/search?q=", srv.base))
+    let body: serde_json::Value = c
+        .get(format!("{}/api/labels/search?q=", srv.base))
         .send()
         .await
         .unwrap()
-        .text()
+        .json()
         .await
         .unwrap();
-    assert!(body.contains("verse"));
-    assert!(body.contains("chorus"));
-    assert!(
-        !body.contains("Create new label"),
-        "empty query shouldn't offer 'Create new'"
+    let matches = body["matches"].as_array().unwrap();
+    assert!(matches.iter().any(|m| m == "verse"));
+    assert!(matches.iter().any(|m| m == "chorus"));
+    assert_eq!(
+        body["canCreate"], false,
+        "empty query shouldn't offer 'create new'"
     );
 }
 
@@ -595,22 +663,27 @@ async fn label_autocomplete_offers_create_for_new_query() {
     upload_one(&srv, &c, "a.mp3").await;
     add_label(&srv, &c, 1, "verse").await;
 
-    let body = c
-        .get(format!("{}/labels/search?q=ver", srv.base))
+    let body: serde_json::Value = c
+        .get(format!("{}/api/labels/search?q=ver", srv.base))
         .send()
         .await
         .unwrap()
-        .text()
+        .json()
         .await
         .unwrap();
     assert!(
-        body.contains("verse"),
+        body["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m == "verse"),
         "should list the matching existing label"
     );
-    assert!(
-        body.contains("Create new label"),
+    assert_eq!(
+        body["canCreate"], true,
         "non-exact match should offer to create"
     );
+    assert_eq!(body["query"], "ver", "create uses the normalised query");
 }
 
 #[tokio::test]
@@ -660,39 +733,28 @@ async fn change_password_updates_credentials() {
     login(&srv, &c, "alice", "old-pw-123").await;
 
     let r = c
-        .post(format!("{}/account", srv.base))
-        .form(&[
-            ("current_password", "old-pw-123"),
-            ("new_password", "new-pw-456789"),
-            ("new_password_confirm", "new-pw-456789"),
-        ])
+        .post(format!("{}/api/account/password", srv.base))
+        .json(&serde_json::json!({
+            "currentPassword": "old-pw-123",
+            "newPassword": "new-pw-456789",
+        }))
         .send()
         .await
         .unwrap();
-    assert_eq!(r.status(), 200);
+    assert_eq!(r.status(), 204);
 
     // A fresh client (no carried session) shouldn't be able to log in
     // with the old password any more.
     let c2 = client();
     let r = c2
-        .post(format!("{}/login", srv.base))
-        .form(&[("username", "alice"), ("password", "old-pw-123")])
+        .post(format!("{}/api/login", srv.base))
+        .json(&serde_json::json!({ "username": "alice", "password": "old-pw-123" }))
         .send()
         .await
         .unwrap();
-    assert_eq!(
-        r.status(),
-        200,
-        "old password should now be rejected (re-renders form)"
-    );
+    assert_eq!(r.status(), 401, "old password should now be rejected");
 
-    let r = c2
-        .post(format!("{}/login", srv.base))
-        .form(&[("username", "alice"), ("password", "new-pw-456789")])
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(r.status(), 303, "new password should authenticate");
+    login(&srv, &c2, "alice", "new-pw-456789").await;
 }
 
 /// Spin up a throwaway HTTP server that captures the JSON body of every
@@ -787,8 +849,8 @@ async fn editing_a_wiki_posts_to_discord() {
         .await
         .unwrap();
 
-    c.post(format!("{}/labels/{label_id}/wiki", srv.base))
-        .form(&[("content", "# Verse")])
+    c.post(format!("{}/api/labels/{label_id}/wiki", srv.base))
+        .json(&serde_json::json!({ "content": "# Verse" }))
         .send()
         .await
         .unwrap();

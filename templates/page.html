@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="{{ css_href }}">
+  {# type=module is deferred, so this can start downloading during parse
+     and still run after #page-data exists. #}
+  <script type="module" src="{{ script_href }}"></script>
+  {% if let Some(href) = preload_href %}
+  <link rel="modulepreload" href="{{ href }}">
+  {% endif %}
+</head>
+<body>
+  <div id="root"></div>
+  {# Already escaped by `page()`: every "<" in the JSON is written as a
+     < escape, so the payload can't close this script element. #}
+  <script id="page-data" type="application/json">{{ payload|safe }}</script>
+</body>
+</html>

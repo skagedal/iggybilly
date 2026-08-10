@@ -18,6 +18,22 @@ jobs:
         with:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install frontend deps
+        run: npm ci
+        working-directory: web
+      - name: Typecheck frontend
+        run: npm run typecheck
+        working-directory: web
+      # Also produces static/dist, so the Rust build and tests run
+      # against a real asset manifest rather than the fallback paths.
+      - name: Build frontend
+        run: npm run build
+        working-directory: web
       - name: Check formatting
         run: cargo fmt --check
       - name: Build

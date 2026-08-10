@@ -5,3 +5,8 @@
 *.db-shm
 *.db-wal
 .DS_Store
+
+# Frontend build output and deps. `static/` holds nothing but the
+# bundles esbuild writes there — build it with `npm run build` in web/.
+/static
+/web/node_modules

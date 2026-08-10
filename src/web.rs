@@ -20,6 +20,7 @@ use tower_sessions_sqlx_store::SqliteStore;
 use tracing::Level;
 
 use crate::{
+    assets::Assets,
     config::Config,
     discord::Discord,
     error::AppError,
@@ -48,9 +49,26 @@ pub struct AppState {
     /// Posts clip-upload and wiki-edit notifications to Discord. Disabled
     /// (a no-op) when no webhook URL is configured.
     pub discord: Discord,
+    /// Maps frontend entry names to their content-hashed URLs.
+    pub assets: Arc<Assets>,
 }
 
 pub async fn serve(config: Config, pool: SqlitePool) -> Result<()> {
+    // Without the manifest every page would still render its shell, but
+    // pointing at bundle URLs that 404 — a blank screen with nothing in
+    // the browser console to explain it. Refuse to start instead: the
+    // app cannot work without the frontend build, and a startup error
+    // naming the missing file is a much shorter debugging session.
+    let manifest = config.static_dir.join("dist/manifest.json");
+    if !manifest.exists() {
+        anyhow::bail!(
+            "no frontend build found at {} — run `npm ci && npm run build` in web/, \
+             or set IGGYBILLY_STATIC_DIR if the bundles live elsewhere \
+             (the default is ./static, relative to the working directory)",
+            manifest.display()
+        );
+    }
+
     let listen = config.listen_addr.clone();
     let app = build_app(pool, Arc::new(config)).await?;
     let listener = TcpListener::bind(&listen).await?;
@@ -77,31 +95,41 @@ pub async fn build_app(pool: SqlitePool, config: Arc<Config>) -> Result<Router> 
 
     let session_layer = SessionManagerLayer::new(session_store)
         .with_secure(config.secure_cookies)
-        // Strict means a cross-site form-POST or hx-delete won't carry
-        // the cookie — our CSRF mitigation for state-changing endpoints.
-        // The only UX cost is that following an external link to the
-        // app doesn't carry the session on that first navigation.
+        // Strict means a cross-site request won't carry the cookie —
+        // our CSRF mitigation for the state-changing /api endpoints,
+        // which is why they need no separate token. The only UX cost is
+        // that following an external link to the app doesn't carry the
+        // session on that first navigation.
         .with_same_site(SameSite::Strict)
         .with_expiry(Expiry::OnInactivity(time::Duration::days(30)));
 
     let discord = Discord::new(config.discord_webhook_url.clone(), config.base_url.clone());
+    let static_dir = config.static_dir.clone();
     let state = AppState {
         pool,
+        assets: Arc::new(Assets::load(&static_dir)),
         config,
         discord,
     };
 
-    Ok(Router::new()
+    // Two kinds of route. The handful under no prefix are pages: real
+    // URLs that return an HTML shell plus that page's React bundle, so
+    // the app stays multi-page and the server keeps owning routing.
+    // Everything under /api is JSON, called by those bundles with fetch.
+    let pages = Router::new()
         .route("/", get(clips::list))
+        .route("/clips/{id}", get(clips::detail))
+        .route("/labels/{id}/wiki/history", get(labels::wiki_history))
+        .route("/login", get(auth_handlers::login_form))
+        .route("/account", get(account::form));
+
+    let api = Router::new()
         .route(
             "/clips",
             post(clips::upload).layer(DefaultBodyLimit::max(MAX_UPLOAD_REQUEST_BYTES)),
         )
-        .route("/clips/{id}", get(clips::detail).delete(clips::delete))
-        .route("/clips/{id}/audio", get(clips::audio))
+        .route("/clips/{id}", axum::routing::delete(clips::delete))
         .route("/clips/{id}/name", post(clips::rename))
-        .route("/clips/{id}/name/form", get(clips::rename_form))
-        .route("/clips/{id}/name/display", get(clips::rename_display))
         .route("/clips/{id}/labels", post(labels::add))
         .route(
             "/clips/{id}/labels/{label_id}",
@@ -112,23 +140,21 @@ pub async fn build_app(pool: SqlitePool, config: Arc<Config>) -> Result<Router> 
             "/labels/{id}/wiki",
             get(labels::wiki_view).post(labels::wiki_save),
         )
-        .route("/labels/{id}/wiki/edit", get(labels::wiki_edit_form))
-        .route("/labels/{id}/wiki/history", get(labels::wiki_history))
         .route(
             "/labels/{id}/wiki/restore/{rev}",
             post(labels::wiki_restore),
         )
-        .route(
-            "/login",
-            get(auth_handlers::login_form).post(auth_handlers::login),
-        )
+        .route("/login", post(auth_handlers::login))
         .route("/logout", post(auth_handlers::logout))
-        .route(
-            "/account",
-            get(account::form).post(account::change_password),
-        )
+        .route("/account/password", post(account::change_password));
+
+    Ok(pages
+        .merge(Router::new().nest("/api", api))
+        // Audio is neither: the browser hits it directly as an <audio>
+        // src and as a download link, so it stays a plain URL.
+        .route("/clips/{id}/audio", get(clips::audio))
         .route("/healthz", get(healthz))
-        .nest_service("/static", ServeDir::new("static"))
+        .nest_service("/static", ServeDir::new(&static_dir))
         .layer(session_layer)
         // Log each request and its response (method, path, status,
         // latency) at INFO. The span carries method/path, so any
@@ -179,8 +205,9 @@ where
     }
 }
 
-/// Like CurrentUser, but for handlers that should return 401 (HTMX
-/// fragments) instead of redirecting.
+/// Like CurrentUser, but for JSON endpoints, which should answer 401
+/// rather than redirect — fetch would follow the redirect and hand the
+/// caller a login page where it expected data.
 pub struct CurrentUserApi(pub SessionUser);
 
 impl<S> FromRequestParts<S> for CurrentUserApi
@@ -192,10 +219,10 @@ where
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let session = Session::from_request_parts(parts, state)
             .await
-            .map_err(|_| AppError::Unauthorized)?;
+            .map_err(|_| AppError::Unauthorized("not signed in".into()))?;
         match session.get::<SessionUser>(SESSION_USER_KEY).await {
             Ok(Some(u)) => Ok(CurrentUserApi(u)),
-            _ => Err(AppError::Unauthorized),
+            _ => Err(AppError::Unauthorized("not signed in".into())),
         }
     }
 }

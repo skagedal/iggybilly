@@ -1,32 +1,34 @@
-use askama::Template;
 use axum::{
     extract::State,
-    response::{IntoResponse, Redirect, Response},
-    Form,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    Json,
 };
 use serde::Deserialize;
 use tower_sessions::Session;
 
 use crate::{
     auth,
-    error::AppResult,
-    handlers::render,
+    error::{AppError, AppResult},
+    handlers::{page, PageFormat},
     models::SessionUser,
     web::{AppState, SESSION_USER_KEY},
 };
 
-#[derive(Template)]
-#[template(path = "login.html")]
-struct LoginPage {
-    error: Option<&'static str>,
-}
-
-pub async fn login_form() -> AppResult<Response> {
-    render(LoginPage { error: None })
+/// GET /login — the shell for the login bundle. It needs no props: the
+/// form posts to /api/login and navigates to / on success.
+pub async fn login_form(State(state): State<AppState>, format: PageFormat) -> AppResult<Response> {
+    page(
+        &state,
+        format,
+        "Sign in — iggybilly",
+        "login",
+        &serde_json::json!({}),
+    )
 }
 
 #[derive(Deserialize)]
-pub struct LoginForm {
+pub struct LoginRequest {
     username: String,
     password: String,
 }
@@ -34,12 +36,12 @@ pub struct LoginForm {
 pub async fn login(
     State(state): State<AppState>,
     session: Session,
-    Form(form): Form<LoginForm>,
+    Json(req): Json<LoginRequest>,
 ) -> AppResult<Response> {
     let row: Option<(i64, String, String, i64)> = sqlx::query_as(
         "SELECT id, username, password_hash, is_admin FROM users WHERE username = ?",
     )
-    .bind(&form.username)
+    .bind(&req.username)
     .fetch_optional(&state.pool)
     .await?;
 
@@ -48,20 +50,22 @@ pub async fn login(
     // time. Without this an attacker can enumerate usernames by timing.
     let (user_record, ok) = match row {
         Some((id, username, hash, is_admin)) => {
-            let ok = auth::verify_password(&form.password, &hash);
+            let ok = auth::verify_password(&req.password, &hash);
             (Some((id, username, is_admin)), ok)
         }
         None => {
-            let _ = auth::verify_password(&form.password, auth::dummy_hash());
+            let _ = auth::verify_password(&req.password, auth::dummy_hash());
             (None, false)
         }
     };
 
     if !ok {
         auth::failed_login_penalty().await;
-        return render(LoginPage {
-            error: Some("Invalid username or password."),
-        });
+        // One message for both failure modes, for the same reason the
+        // timing is levelled: don't confirm which usernames exist.
+        return Err(AppError::Unauthorized(
+            "Invalid username or password.".into(),
+        ));
     }
     let (id, username, is_admin) = user_record.expect("ok implies a user row");
 
@@ -74,10 +78,10 @@ pub async fn login(
         is_admin: is_admin != 0,
     };
     session.insert(SESSION_USER_KEY, &user).await?;
-    Ok(Redirect::to("/").into_response())
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 pub async fn logout(session: Session) -> AppResult<Response> {
     session.flush().await?;
-    Ok(Redirect::to("/login").into_response())
+    Ok(StatusCode::NO_CONTENT.into_response())
 }

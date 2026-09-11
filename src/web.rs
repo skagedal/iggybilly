@@ -151,9 +151,12 @@ pub async fn build_app(pool: SqlitePool, config: Arc<Config>) -> Result<Router> 
 
     Ok(pages
         .merge(Router::new().nest("/api", api))
-        // Audio is neither: the browser hits it directly as an <audio>
-        // src and as a download link, and the app hands it to the
-        // platform player, so it stays a plain URL.
+        // And /api/v1 is the app's: the same data, shaped for a phone
+        // rather than for the React pages. See `crate::api`.
+        .merge(Router::new().nest("/api/v1", crate::api::router()))
+        // Audio is none of those: the browser hits it directly as an
+        // <audio> src and as a download link, and the app hands it to
+        // the platform player, so it stays a plain URL.
         .route("/clips/{id}/audio", get(clips::audio))
         .route("/healthz", get(healthz))
         .nest_service("/static", ServeDir::new(&static_dir))

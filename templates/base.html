@@ -58,6 +58,7 @@
       };
 
       let ws = null;
+      let media = null;
       let currentId = null;
 
       // Tell the page which clip is loaded and whether it's playing, so
@@ -74,14 +75,23 @@
 
       playBtn.addEventListener('click', () => { if (ws) ws.playPause(); });
 
+      // wavesurfer's destroy() leaves a media element we supplied ourselves
+      // playing (it only stops one it created), so stop and unload it here.
+      const unload = () => {
+        if (ws) { ws.pause(); ws.destroy(); ws = null; }
+        if (media) { media.pause(); media.removeAttribute('src'); media.load(); media = null; }
+      };
+
       // Load a clip into the bar and take over playback. `o` carries the
       // clip's id, name, urls and (optionally) precomputed peaks+duration.
       window.iggyPlay = function (o) {
         // Re-clicking the current clip just toggles it.
         if (o.id === currentId && ws) { ws.playPause(); return; }
 
+        // Stop whatever is loaded before currentId moves on, so the old
+        // clip's play button gets the pause event and resets to ▶.
+        unload();
         currentId = o.id;
-        if (ws) { ws.destroy(); ws = null; }
 
         nameEl.textContent = o.name;
         nameEl.href = o.clipHref;
@@ -98,7 +108,7 @@
         const base = { container: wfEl, waveColor: '#aaa', progressColor: '#2a8055', height: 40 };
         if (o.peaks && o.duration) {
           // Render instantly from peaks; only now fetch the audio to play.
-          const media = new Audio();
+          media = new Audio();
           media.preload = 'none';
           media.src = o.audioUrl;
           ws = WaveSurfer.create({ ...base, media, peaks: [o.peaks], duration: o.duration });

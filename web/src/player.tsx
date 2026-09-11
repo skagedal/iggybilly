@@ -112,10 +112,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     };
 
     let ws: WaveSurfer;
+    // Held in the effect's scope so the cleanup below can stop it.
+    // wavesurfer's own destroy() bails out before pausing a media element
+    // it did not create — `if (this.isExternalMedia) return`, in
+    // Player.destroy — so one we supply plays on with nothing left
+    // holding a reference to stop it. That is two clips at once the
+    // moment you start a second.
+    let media: HTMLAudioElement | null = null;
     if (track.peaks && track.durationSeconds) {
       // Draw from the stored peaks and let an <audio preload="none">
       // fetch the file only once playback actually starts.
-      const media = new Audio();
+      media = new Audio();
       media.preload = "none";
       media.src = track.audioUrl;
       ws = WaveSurfer.create({
@@ -147,6 +154,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       waveSurferRef.current = null;
       setPlaying(false);
       ws.destroy();
+      if (media) {
+        media.pause();
+        media.removeAttribute("src");
+        // Resets the element and drops the fetch still in flight.
+        media.load();
+      }
     };
   }, [track]);
 

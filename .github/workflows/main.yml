@@ -47,9 +47,31 @@ jobs:
       - name: Test
         run: cargo test --locked
 
+  mobile:
+    name: Check the mobile app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: subosito/flutter-action@v2
+        with:
+          # The SDK version is pinned per app in mobile/.fvmrc, which is
+          # also what fvm reads locally — so a bump is one committed file
+          # and CI follows it with no change here.
+          flutter-version-file: mobile/.fvmrc
+          cache: true
+      - name: Install dependencies
+        run: flutter pub get
+        working-directory: mobile
+      - name: Analyze
+        run: flutter analyze
+        working-directory: mobile
+      - name: Test
+        run: flutter test
+        working-directory: mobile
+
   deploy:
     name: Build, push and deploy
-    needs: test
+    needs: [test, mobile]
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     steps:

@@ -1,0 +1,47 @@
+name: iggybilly
+description: "iggybilly — audio clips for a band, on iOS and Android"
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  # The app is pinned to Flutter 3.47.2 in .fvmrc; run it through
+  # `fvm flutter`, not a flutter off $PATH.
+  sdk: ^3.13.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # The API client. Pure Dart, so the client can be swapped for a fake
+  # in tests rather than mocked at the platform channel.
+  http: ^1.6.0
+
+  # Playback. just_audio streams from a URL with our Authorization
+  # header attached; audio_session is what makes the clip keep playing
+  # with the screen off and duck correctly against other apps.
+  just_audio: ^0.10.6
+  audio_session: ^0.2.4
+
+  # The bearer token goes in the iOS keychain / Android keystore, not in
+  # shared_preferences — it is a credential, and a rooted device should
+  # not find it in a plist.
+  flutter_secure_storage: ^10.0.1
+  # Everything that isn't a secret: which server, who was last signed in.
+  shared_preferences: ^2.5.5
+
+  # Picking audio files to upload, and naming the device in the token
+  # list so a phone is recognisable among a user's devices.
+  file_picker: ^10.3.10
+  device_info_plus: ^12.1.0
+
+  # Label wiki pages arrive as Markdown source and are rendered here.
+  # flutter_markdown is discontinued; this is its maintained successor.
+  flutter_markdown_plus: ^1.0.12
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true

@@ -2,7 +2,8 @@
 
 Self-hosted audio clip sharing for a band. Rust + Axum + SQLite on the
 back, React + TypeScript on the front, deployed as a single container to
-`iggybilly.skagedal.tech`.
+`iggybilly.skagedal.tech`. There is also a Flutter app for iOS and
+Android in [`mobile/`](mobile/), talking to the same server.
 
 ## What it does
 
@@ -23,6 +24,10 @@ back, React + TypeScript on the front, deployed as a single container to
 - Clips can be filtered by clicking labels (AND semantics with multiple).
 - Each clip has a download link that serves the original upload bytes
   with `Content-Disposition: attachment` and the original filename.
+- Each label can have a Markdown wiki page, with full edit history and
+  restore. Filtering by a label shows its page above the clips.
+- The phone app does all of the above, and adds a list of the devices
+  you are signed in on, any of which you can sign out from any other.
 
 ## How the frontend fits together
 
@@ -82,6 +87,49 @@ component, a line in the `pages` map in `web/src/pageData.ts`, and a
 route in `src/web.rs` calling
 `handlers::page(&state, format, title, "foo", &props)`.
 
+## Two clients, one server
+
+The browser and the app are different enough that pretending otherwise
+would cost more than admitting it.
+
+**The browser** keeps a session cookie, and its screens are server
+routes: each returns `{entry, title, props}`, naming a React module and
+handing it the data for that page. The props are shaped for the page —
+dates already formatted for Stockholm, labels already turned into
+`/?label=…` links.
+
+**The app** sends `Authorization: Bearer` and talks to `/api/v1`, which
+is the same data in a shape a phone can use: RFC 3339 instants it can
+format in the device's own zone, Markdown source rather than rendered
+HTML, ids and names rather than hrefs, and an explicit URL for each
+clip's audio. See `src/api/`.
+
+Neither is the canonical shape. Both are serialisations of the domain
+types in `src/queries/`, which is where the SQL lives, so there is one
+implementation of "list the clips carrying all of these labels" and two
+presentations of it. Writes work the same way: uploading, deleting,
+renaming and setting a password are functions both routes call.
+
+### Tokens
+
+A browser tab should hold a session; an app install should not, because
+it stays signed in for months on a device that can be lost. So each
+install gets its own bearer token (`src/tokens.rs`), which the account
+screen lists and can revoke one at a time.
+
+Only a SHA-256 of each token is stored — SHA-256 rather than argon2
+because the token is 256 bits we generated, not a password someone
+chose, so there is no dictionary to run against it and every request
+pays that hash. Changing a password revokes every token the user has,
+since the reason to change it is usually that someone else might know
+it; the device that made the change is handed a replacement so it is not
+signed out by its own request.
+
+The audio route takes either credential and fails the way its caller can
+act on: 401 for a request that presented a token, a redirect to the
+login page for a browser that presented nothing. A media player that
+followed that redirect would try to decode the login page.
+
 ## Local dev
 
 `./local/run` is the entry point. It installs the frontend dependencies
@@ -107,6 +155,10 @@ bundle hashes change you need to restart the server too.
 
 `cd web && pnpm run check` runs `tsc` and ESLint over the frontend; CI
 runs it along with `cargo fmt --check` and the test suite.
+
+The phone app lives in [`mobile/`](mobile/) and has its own README. Its
+checks — `flutter analyze` and `flutter test` — run in CI too, against
+the SDK version pinned in `mobile/.fvmrc`.
 
 The frontend uses **pnpm**, not npm, and its manifest is
 `web/package.json5` — pnpm reads JSON5 natively, so there is no

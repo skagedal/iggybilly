@@ -44,7 +44,7 @@ async fn start_with(discord_webhook_url: Option<String>, base_url: Option<String
         audio_dir,
         // Point away from the real build output so the tests assert on
         // the no-manifest fallback regardless of whether this checkout
-        // has run `npm run build`.
+        // has run the frontend build.
         static_dir: data_dir.join("static"),
         // Tests speak plain HTTP to 127.0.0.1; the Secure flag would
         // make reqwest's cookie store drop the session cookie.

@@ -86,19 +86,23 @@ route in `src/web.rs` calling
 
 Two processes. In one terminal:
 
-    cd web && npm install && npm run dev    # rebuilds on change
+    cd web && pnpm install && pnpm run dev    # rebuilds on change
 
 and in another:
 
     cargo run -- create-user simon --admin
     cargo run -- serve            # listens on :9020 by default
 
-Then reload the browser — there's no HMR, `npm run dev` just rebuilds.
+Then reload the browser — there's no HMR, `pnpm run dev` just rebuilds.
 Note that the server reads the asset manifest once at startup, so if the
 bundle hashes change you need to restart `cargo run` too.
 
-`cd web && npm run typecheck` runs `tsc` over the frontend; CI runs it
-along with `cargo fmt --check` and the test suite.
+`cd web && pnpm run check` runs `tsc` and ESLint over the frontend; CI
+runs it along with `cargo fmt --check` and the test suite.
+
+The frontend uses **pnpm**, not npm, and its manifest is
+`web/package.json5` — pnpm reads JSON5 natively, so there is no
+`package.json` to keep in sync.
 
 The Rust tests don't need the frontend built — without a manifest the
 shell falls back to unhashed bundle paths, which is fine for asserting

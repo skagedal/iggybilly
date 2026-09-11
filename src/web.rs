@@ -62,7 +62,7 @@ pub async fn serve(config: Config, pool: SqlitePool) -> Result<()> {
     let manifest = config.static_dir.join("dist/manifest.json");
     if !manifest.exists() {
         anyhow::bail!(
-            "no frontend build found at {} — run `npm ci && npm run build` in web/, \
+            "no frontend build found at {} — run `pnpm install && pnpm run build` in web/, \
              or set IGGYBILLY_STATIC_DIR if the bundles live elsewhere \
              (the default is ./static, relative to the working directory)",
             manifest.display()

@@ -7,15 +7,20 @@ FROM node:24-bookworm-slim AS frontend
 
 WORKDIR /web
 
+# pnpm comes from corepack, which ships with the node image. The version
+# is named here rather than read from the manifest: corepack looks for a
+# `packageManager` field in package.json, and ours is package.json5.
+RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
+
 # Deps first so a source-only change doesn't re-run the install.
-COPY web/package.json web/package-lock.json ./
-RUN npm ci
+COPY web/package.json5 web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
 
 COPY web/ ./
 # build.mjs writes to ../static/dist, i.e. /static/dist in this stage,
 # together with the manifest.json the server reads to resolve the hashed
 # filenames.
-RUN npm run build
+RUN pnpm run build
 
 # UPGRADE_POINT
 FROM rust:1.90-slim-bookworm AS build

@@ -38,7 +38,7 @@ impl Assets {
                 tracing::warn!(
                     error = %e,
                     path = %path.display(),
-                    "no asset manifest; run `npm run build` in web/ to generate one"
+                    "no asset manifest; run `pnpm run build` in web/ to generate one"
                 );
                 HashMap::new()
             }

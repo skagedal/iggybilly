@@ -88,15 +88,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [track, setTrack] = useState<Track | null>(null);
   const [isPlaying, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
+  // Only for clips the server couldn't decode: wavesurfer reports their
+  // duration once it has fetched the file. Everything else carries its
+  // duration in the track, so the length is derived, not stored twice.
+  const [decodedDuration, setDecodedDuration] = useState(0);
+  const duration = track?.durationSeconds ?? decodedDuration;
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const waveSurferRef = useRef<WaveSurfer | null>(null);
-  // Mirrors `track` so `play` can compare against it without taking a
-  // dependency on it — a state updater is the wrong place to do the
-  // comparison, since React is free to run updaters more than once.
-  const trackRef = useRef<Track | null>(null);
-  trackRef.current = track;
 
   // Build (and rebuild) the instance whenever the loaded track changes.
   // The container belongs to the bar, which never unmounts, so this is
@@ -125,14 +124,13 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         peaks: [track.peaks],
         duration: track.durationSeconds,
       });
-      setDuration(track.durationSeconds);
       void ws.play();
     } else {
       // No peaks (an older upload, or a file symphonia couldn't read):
       // wavesurfer fetches and decodes, then we start.
       ws = WaveSurfer.create({ ...base, url: track.audioUrl });
       ws.on("ready", (d) => {
-        setDuration(d);
+        setDecodedDuration(d);
         void ws.play();
       });
     }
@@ -152,15 +150,20 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     };
   }, [track]);
 
-  const play = useCallback((next: Track) => {
-    // Re-pressing play on the loaded clip toggles it rather than
-    // rebuilding the instance and losing the position.
-    if (trackRef.current?.clipId === next.clipId) {
-      void waveSurferRef.current?.playPause();
-      return;
-    }
-    setTrack(next);
-  }, []);
+  const play = useCallback(
+    (next: Track) => {
+      // Re-pressing play on the loaded clip toggles it rather than
+      // rebuilding the instance and losing the position. The comparison
+      // belongs here and not in a state updater, which React is free to
+      // run more than once.
+      if (track?.clipId === next.clipId) {
+        void waveSurferRef.current?.playPause();
+        return;
+      }
+      setTrack(next);
+    },
+    [track],
+  );
 
   const toggle = useCallback(() => {
     void waveSurferRef.current?.playPause();

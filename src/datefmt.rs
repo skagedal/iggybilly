@@ -15,6 +15,13 @@ pub fn iso_date(utc: OffsetDateTime) -> Option<String> {
         .ok()
 }
 
+/// Today's civil date in Stockholm, as ISO "YYYY-MM-DD". Used to stamp
+/// a token's last-used day without writing on every request.
+pub fn today_utc() -> String {
+    let now = OffsetDateTime::now_utc();
+    iso_date(now).unwrap_or_else(|| now.date().to_string())
+}
+
 /// Format a stored UTC timestamp (RFC 3339) as the plain ISO date —
 /// "2026-05-26" — it fell on in Stockholm. Anything that doesn't parse
 /// as RFC 3339 (a bare date or year from an audio tag) is passed through

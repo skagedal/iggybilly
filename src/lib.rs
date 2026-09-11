@@ -15,4 +15,6 @@ pub mod error;
 pub mod handlers;
 pub mod markdown;
 pub mod models;
+pub mod queries;
+pub mod tokens;
 pub mod web;

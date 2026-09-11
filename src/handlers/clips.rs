@@ -17,7 +17,8 @@ use tokio_util::io::ReaderStream;
 use crate::{
     error::{AppError, AppResult},
     handlers::{page, PageFormat},
-    web::{AppState, CurrentUser, CurrentUserApi, MAX_UPLOAD_BYTES},
+    queries,
+    web::{ApiUser, AppState, CurrentUser, MediaUser, MAX_UPLOAD_BYTES},
 };
 
 #[derive(Debug, Serialize)]
@@ -51,13 +52,6 @@ pub struct FilterChip {
     pub remove_href: String,
 }
 
-/// Wrap a stored peaks string as raw JSON, dropping it if it somehow
-/// isn't valid JSON — a missing waveform just falls back to lazy decode
-/// in the browser, which is better than failing the whole page.
-fn peaks_json(stored: Option<String>) -> Option<Box<RawValue>> {
-    stored.and_then(|s| RawValue::from_string(s).ok())
-}
-
 /// Build a "/?label=…&label=…" link from a list of active label filters.
 /// Returns "/" when the list is empty so the home page is reachable
 /// with no query string.
@@ -68,6 +62,43 @@ fn filter_url(labels: &[&str]) -> String {
     let qs = serde_urlencoded::to_string(labels.iter().map(|l| ("label", *l)).collect::<Vec<_>>())
         .unwrap_or_default();
     format!("/?{qs}")
+}
+
+/// Turn a stored clip into a row for the list, resolving each label to
+/// the filter link that adds it — or, when it is already filtered on,
+/// to the current filter, so clicking it is a no-op rather than a
+/// duplicate.
+fn clip_row(clip: queries::clips::Clip, active: &[&str]) -> ClipRow {
+    let labels = clip
+        .labels
+        .into_iter()
+        .map(|label| {
+            let already_active = active.iter().any(|a| a.eq_ignore_ascii_case(&label.name));
+            let href = if already_active {
+                filter_url(active)
+            } else {
+                let mut combined: Vec<&str> = active.to_vec();
+                combined.push(&label.name);
+                filter_url(&combined)
+            };
+            LabelLink {
+                name: label.name,
+                href,
+            }
+        })
+        .collect();
+
+    ClipRow {
+        id: clip.id,
+        name: clip.name,
+        original_filename: clip.original_filename,
+        uploaded_at: crate::datefmt::iso_date_from_rfc3339(&clip.uploaded_at),
+        recording_date: clip.recording_date,
+        uploader: clip.uploader,
+        labels,
+        peaks: clip.peaks,
+        duration_seconds: clip.duration_seconds,
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -109,7 +140,11 @@ pub async fn list(
     }
 
     let active_strs: Vec<&str> = active.iter().map(|s| s.as_str()).collect();
-    let clips = load_clips(&state.pool, &active_strs).await?;
+    let clips: Vec<ClipRow> = queries::clips::list(&state.pool, &active_strs)
+        .await?
+        .into_iter()
+        .map(|c| clip_row(c, &active_strs))
+        .collect();
     let active_wikis = super::labels::active_wikis(&state, &active_strs).await?;
 
     // For each active filter, the X-button link drops just that one label.
@@ -142,104 +177,6 @@ pub async fn list(
             active_wikis,
         },
     )
-}
-
-async fn load_clips(pool: &SqlitePool, active: &[&str]) -> AppResult<Vec<ClipRow>> {
-    // AND filter: a clip must have every label in `active`. Done with
-    // GROUP BY HAVING COUNT(DISTINCT label_id) = N. The IN-list is
-    // built with ? placeholders since sqlx doesn't expand Vec<_>.
-    type Row = (
-        i64,
-        String,
-        String,
-        String,
-        Option<String>,
-        String,
-        Option<String>,
-        Option<f64>,
-    );
-    let rows: Vec<Row> = if active.is_empty() {
-        sqlx::query_as(
-            "SELECT c.id, c.name, c.original_filename, c.uploaded_at,
-                    c.recording_date, u.username, c.peaks, c.duration_seconds
-             FROM clips c JOIN users u ON u.id = c.uploaded_by
-             ORDER BY c.uploaded_at DESC",
-        )
-        .fetch_all(pool)
-        .await?
-    } else {
-        let placeholders = vec!["?"; active.len()].join(", ");
-        let sql = format!(
-            "SELECT c.id, c.name, c.original_filename, c.uploaded_at,
-                    c.recording_date, u.username, c.peaks, c.duration_seconds
-             FROM clips c
-             JOIN users u ON u.id = c.uploaded_by
-             JOIN clip_labels cl ON cl.clip_id = c.id
-             JOIN labels l ON l.id = cl.label_id
-             WHERE l.name IN ({placeholders}) COLLATE NOCASE
-             GROUP BY c.id
-             HAVING COUNT(DISTINCT l.id) = ?
-             ORDER BY c.uploaded_at DESC"
-        );
-        let mut q = sqlx::query_as(&sql);
-        for t in active {
-            q = q.bind(*t);
-        }
-        q = q.bind(active.len() as i64);
-        q.fetch_all(pool).await?
-    };
-
-    let mut clips = Vec::with_capacity(rows.len());
-    for (
-        id,
-        name,
-        original_filename,
-        uploaded_at,
-        recording_date,
-        uploader,
-        peaks,
-        duration_seconds,
-    ) in rows
-    {
-        let label_rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT l.name FROM labels l
-             JOIN clip_labels cl ON cl.label_id = l.id
-             WHERE cl.clip_id = ? ORDER BY l.name COLLATE NOCASE",
-        )
-        .bind(id)
-        .fetch_all(pool)
-        .await?;
-
-        // Per-label link: clicking adds it to the current filter, or
-        // is a no-op if already active.
-        let labels: Vec<LabelLink> = label_rows
-            .into_iter()
-            .map(|(lname,)| {
-                let already_active = active.iter().any(|a| a.eq_ignore_ascii_case(&lname));
-                let href = if already_active {
-                    filter_url(active)
-                } else {
-                    let mut combined: Vec<&str> = active.to_vec();
-                    combined.push(&lname);
-                    filter_url(&combined)
-                };
-                LabelLink { name: lname, href }
-            })
-            .collect();
-
-        clips.push(ClipRow {
-            id,
-            name,
-            original_filename,
-            uploaded_at: crate::datefmt::iso_date_from_rfc3339(&uploaded_at),
-            recording_date,
-            uploader,
-            labels,
-            peaks: peaks_json(peaks),
-            duration_seconds,
-        });
-    }
-    Ok(clips)
 }
 
 #[derive(Debug, Serialize)]
@@ -280,45 +217,12 @@ pub async fn detail(
     format: PageFormat,
     AxumPath(id): AxumPath<i64>,
 ) -> AppResult<Response> {
-    type DetailRow = (
-        i64,
-        String,
-        String,
-        String,
-        String,
-        Option<String>,
-        String,
-        i64,
-        Option<String>,
-        Option<f64>,
-    );
-    let row: Option<DetailRow> = sqlx::query_as(
-        "SELECT c.id, c.name, c.original_filename, c.content_type,
-                c.uploaded_at, c.recording_date, u.username, c.uploaded_by,
-                c.peaks, c.duration_seconds
-         FROM clips c JOIN users u ON u.id = c.uploaded_by
-         WHERE c.id = ?",
-    )
-    .bind(id)
-    .fetch_optional(&state.pool)
-    .await?;
+    let clip = queries::clips::get(&state.pool, id)
+        .await?
+        .ok_or(AppError::NotFound)?;
 
-    let (
-        clip_id,
-        name,
-        original_filename,
-        content_type,
-        uploaded_at,
-        recording_date,
-        uploader,
-        uploaded_by,
-        peaks,
-        duration_seconds,
-    ) = row.ok_or(AppError::NotFound)?;
-
-    let labels = load_labels(&state, clip_id).await?;
-
-    let title = format!("{name} — iggybilly");
+    let can_delete = clip.uploaded_by == user.id;
+    let title = format!("{} — iggybilly", clip.name);
     page(
         &state,
         format,
@@ -327,20 +231,31 @@ pub async fn detail(
         &ClipProps {
             username: user.username,
             clip: ClipDetail {
-                id: clip_id,
-                name,
-                original_filename,
-                content_type,
-                uploader,
-                uploaded_at: crate::datefmt::iso_date_from_rfc3339(&uploaded_at),
-                recording_date,
-                labels,
-                peaks: peaks_json(peaks),
-                duration_seconds,
-                can_delete: uploaded_by == user.id,
+                id: clip.id,
+                name: clip.name,
+                original_filename: clip.original_filename,
+                content_type: clip.content_type,
+                uploader: clip.uploader,
+                uploaded_at: crate::datefmt::iso_date_from_rfc3339(&clip.uploaded_at),
+                recording_date: clip.recording_date,
+                labels: clip.labels.into_iter().map(clip_label).collect(),
+                peaks: clip.peaks,
+                duration_seconds: clip.duration_seconds,
+                can_delete,
             },
         },
     )
+}
+
+/// A label on the clip page, carrying the link that filters the list
+/// down to it.
+fn clip_label(label: queries::clips::Label) -> ClipLabel {
+    let filter_href = filter_url(&[label.name.as_str()]);
+    ClipLabel {
+        id: label.id,
+        name: label.name,
+        filter_href,
+    }
 }
 
 /// DELETE /api/clips/{id} — remove a clip the current user uploaded,
@@ -350,9 +265,20 @@ pub async fn detail(
 /// the clip list itself, since the page it was on is now gone.
 pub async fn delete(
     State(state): State<AppState>,
-    CurrentUserApi(user): CurrentUserApi,
+    ApiUser { user, .. }: ApiUser,
     AxumPath(id): AxumPath<i64>,
 ) -> AppResult<Response> {
+    remove(&state, &user, id).await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// Delete a clip and its bytes, checking that the caller uploaded it.
+/// Shared with the app's delete route.
+pub(crate) async fn remove(
+    state: &AppState,
+    user: &crate::models::SessionUser,
+    id: i64,
+) -> AppResult<()> {
     let row: Option<(i64, String)> =
         sqlx::query_as("SELECT uploaded_by, storage_filename FROM clips WHERE id = ?")
             .bind(id)
@@ -380,28 +306,15 @@ pub async fn delete(
         tracing::warn!(error = ?e, path = %path.display(), "failed to delete audio file for removed clip");
     }
 
-    Ok(StatusCode::NO_CONTENT.into_response())
+    Ok(())
 }
 
+/// A clip's labels, in the shape the clip page wants them.
 pub(super) async fn load_labels(state: &AppState, clip_id: i64) -> AppResult<Vec<ClipLabel>> {
-    let rows: Vec<(i64, String)> = sqlx::query_as(
-        "SELECT l.id, l.name FROM labels l
-         JOIN clip_labels cl ON cl.label_id = l.id
-         WHERE cl.clip_id = ? ORDER BY l.name COLLATE NOCASE",
-    )
-    .bind(clip_id)
-    .fetch_all(&state.pool)
-    .await?;
-    Ok(rows
+    Ok(queries::clips::labels_for(&state.pool, clip_id)
+        .await?
         .into_iter()
-        .map(|(id, name)| {
-            let filter_href = filter_url(&[name.as_str()]);
-            ClipLabel {
-                id,
-                name,
-                filter_href,
-            }
-        })
+        .map(clip_label)
         .collect())
 }
 
@@ -415,17 +328,18 @@ pub struct AudioQuery {
 
 pub async fn audio(
     State(state): State<AppState>,
-    _user: CurrentUser,
+    _user: MediaUser,
     AxumPath(id): AxumPath<i64>,
     Query(q): Query<AudioQuery>,
 ) -> AppResult<Response> {
-    let row: Option<(String, String, String)> = sqlx::query_as(
-        "SELECT storage_filename, content_type, original_filename FROM clips WHERE id = ?",
-    )
-    .bind(id)
-    .fetch_optional(&state.pool)
-    .await?;
-    let (storage, content_type, original_filename) = row.ok_or(AppError::NotFound)?;
+    let file_row = queries::clips::audio_file(&state.pool, id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let queries::clips::AudioFile {
+        storage_filename: storage,
+        content_type,
+        original_filename,
+    } = file_row;
 
     let path = state.config.audio_dir.join(&storage);
     // Stream from disk so we don't pull the whole file into RAM. Browsers
@@ -510,11 +424,32 @@ fn audio_content_type(ext: &str) -> Option<&'static str> {
     }
 }
 
+/// POST /api/clips — the web's upload endpoint. The work is in
+/// `ingest`, which the app's own upload route calls too.
 pub async fn upload(
     State(state): State<AppState>,
-    CurrentUser(user): CurrentUser,
-    mut multipart: Multipart,
+    ApiUser { user, .. }: ApiUser,
+    multipart: Multipart,
 ) -> AppResult<Response> {
+    let uploaded = ingest(&state, &user, multipart).await?;
+    Ok(Json(UploadResponse {
+        clips: uploaded
+            .into_iter()
+            .map(|(id, name)| UploadedClip { id, name })
+            .collect(),
+    })
+    .into_response())
+}
+
+/// Take a multipart body of audio files, store each one, and return the
+/// (id, name) of every clip created. Shared by both upload routes, so
+/// the format allow-list, the byte cap, the waveform pass and the
+/// name-collision retry have exactly one implementation.
+pub(crate) async fn ingest(
+    state: &AppState,
+    user: &crate::models::SessionUser,
+    mut multipart: Multipart,
+) -> AppResult<Vec<(i64, String)>> {
     // Each selected or dropped file arrives as its own "audio" multipart
     // field. We stream each straight to disk rather than buffering: a
     // batch of 10 MB files would otherwise cost that much resident memory
@@ -618,13 +553,7 @@ pub async fn upload(
     // One Discord post for the whole batch, fire-and-forget.
     state.discord.clips_uploaded(&user.username, &uploaded);
 
-    Ok(Json(UploadResponse {
-        clips: uploaded
-            .into_iter()
-            .map(|(id, name)| UploadedClip { id, name })
-            .collect(),
-    })
-    .into_response())
+    Ok(uploaded)
 }
 
 #[derive(Serialize)]
@@ -882,11 +811,18 @@ struct RenameResponse {
 
 pub async fn rename(
     State(state): State<AppState>,
-    CurrentUserApi(_user): CurrentUserApi,
+    _user: ApiUser,
     AxumPath(id): AxumPath<i64>,
     Json(req): Json<RenameRequest>,
 ) -> AppResult<Response> {
-    let new_name = req.name.trim();
+    let name = set_name(&state, id, &req.name).await?;
+    Ok(Json(RenameResponse { name }).into_response())
+}
+
+/// Rename a clip, returning the name it ended up with. Shared with the
+/// app's rename route.
+pub(crate) async fn set_name(state: &AppState, id: i64, requested: &str) -> AppResult<String> {
+    let new_name = requested.trim();
     if new_name.is_empty() {
         return Err(AppError::BadRequest("name can't be empty".into()));
     }
@@ -902,10 +838,7 @@ pub async fn rename(
 
     match result {
         Ok(r) if r.rows_affected() == 0 => Err(AppError::NotFound),
-        Ok(_) => Ok(Json(RenameResponse {
-            name: new_name.to_string(),
-        })
-        .into_response()),
+        Ok(_) => Ok(new_name.to_string()),
         Err(sqlx::Error::Database(d)) if d.is_unique_violation() => Err(AppError::Conflict(
             format!("A clip named “{new_name}” already exists."),
         )),

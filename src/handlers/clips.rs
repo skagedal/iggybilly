@@ -1,26 +1,27 @@
 use std::path::{Path, PathBuf};
 
-use askama::Template;
 use axum::{
     body::Body,
     extract::{Multipart, Path as AxumPath, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
-    response::{IntoResponse, Redirect, Response},
-    Form,
+    response::{IntoResponse, Response},
+    Json,
 };
 use axum_extra::extract::Query;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 use sqlx::SqlitePool;
 use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
 
 use crate::{
     error::{AppError, AppResult},
-    handlers::render,
+    handlers::{page, PageFormat},
     web::{AppState, CurrentUser, CurrentUserApi, MAX_UPLOAD_BYTES},
 };
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClipRow {
     pub id: i64,
     pub name: String,
@@ -29,21 +30,32 @@ pub struct ClipRow {
     pub recording_date: Option<String>,
     pub uploader: String,
     pub labels: Vec<LabelLink>,
-    /// Compact JSON peaks array for WaveSurfer, or None if not computed.
-    pub peaks: Option<String>,
+    /// The peaks array WaveSurfer draws from, or None if we couldn't
+    /// decode the file. Stored as a JSON string in SQLite and passed
+    /// straight through as raw JSON so we never parse a few hundred
+    /// floats per clip just to re-serialise them.
+    pub peaks: Option<Box<RawValue>>,
     pub duration_seconds: Option<f64>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct LabelLink {
     pub name: String,
     pub href: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FilterChip {
     pub name: String,
     pub remove_href: String,
+}
+
+/// Wrap a stored peaks string as raw JSON, dropping it if it somehow
+/// isn't valid JSON — a missing waveform just falls back to lazy decode
+/// in the browser, which is better than failing the whole page.
+fn peaks_json(stored: Option<String>) -> Option<Box<RawValue>> {
+    stored.and_then(|s| RawValue::from_string(s).ok())
 }
 
 /// Build a "/?label=…&label=…" link from a list of active label filters.
@@ -67,20 +79,21 @@ pub struct ListQuery {
     pub labels: Vec<String>,
 }
 
-#[derive(Template)]
-#[template(path = "index.html")]
-struct IndexPage {
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IndexProps {
     username: String,
     clips: Vec<ClipRow>,
     active_filters: Vec<FilterChip>,
-    /// Pre-rendered wiki view partials, one per active filter label that
-    /// has a label row — shown above the clips.
-    active_wikis: Vec<String>,
+    /// One wiki page per active filter label that has a label row —
+    /// shown above the clips.
+    active_wikis: Vec<super::labels::WikiPage>,
 }
 
 pub async fn list(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
+    format: PageFormat,
     Query(q): Query<ListQuery>,
 ) -> AppResult<Response> {
     // Normalise filter labels: trim, dedupe case-insensitively, drop empties.
@@ -97,7 +110,7 @@ pub async fn list(
 
     let active_strs: Vec<&str> = active.iter().map(|s| s.as_str()).collect();
     let clips = load_clips(&state.pool, &active_strs).await?;
-    let active_wikis = super::labels::active_wikis_html(&state, &active_strs).await?;
+    let active_wikis = super::labels::active_wikis(&state, &active_strs).await?;
 
     // For each active filter, the X-button link drops just that one label.
     let active_filters: Vec<FilterChip> = active
@@ -117,12 +130,18 @@ pub async fn list(
         })
         .collect();
 
-    render(IndexPage {
-        username: user.username,
-        clips,
-        active_filters,
-        active_wikis,
-    })
+    page(
+        &state,
+        format,
+        "Clips — iggybilly",
+        "index",
+        &IndexProps {
+            username: user.username,
+            clips,
+            active_filters,
+            active_wikis,
+        },
+    )
 }
 
 async fn load_clips(pool: &SqlitePool, active: &[&str]) -> AppResult<Vec<ClipRow>> {
@@ -216,25 +235,25 @@ async fn load_clips(pool: &SqlitePool, active: &[&str]) -> AppResult<Vec<ClipRow
             recording_date,
             uploader,
             labels,
-            peaks,
+            peaks: peaks_json(peaks),
             duration_seconds,
         });
     }
     Ok(clips)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClipLabel {
     pub id: i64,
     pub name: String,
     pub filter_href: String,
 }
 
-#[derive(Template)]
-#[template(path = "clip.html")]
-struct ClipPage {
-    username: String,
-    clip_id: i64,
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClipDetail {
+    id: i64,
     name: String,
     original_filename: String,
     content_type: String,
@@ -242,16 +261,23 @@ struct ClipPage {
     uploaded_at: String,
     recording_date: Option<String>,
     labels: Vec<ClipLabel>,
-    peaks: Option<String>,
+    peaks: Option<Box<RawValue>>,
     duration_seconds: Option<f64>,
     /// Whether the current user may delete this clip. True only for the
     /// uploader — you can remove your own clips, nobody else's.
     can_delete: bool,
 }
 
+#[derive(Serialize)]
+struct ClipProps {
+    username: String,
+    clip: ClipDetail,
+}
+
 pub async fn detail(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
+    format: PageFormat,
     AxumPath(id): AxumPath<i64>,
 ) -> AppResult<Response> {
     type DetailRow = (
@@ -292,27 +318,36 @@ pub async fn detail(
 
     let labels = load_labels(&state, clip_id).await?;
 
-    render(ClipPage {
-        username: user.username,
-        clip_id,
-        name,
-        original_filename,
-        content_type,
-        uploader,
-        uploaded_at: crate::datefmt::iso_date_from_rfc3339(&uploaded_at),
-        recording_date,
-        labels,
-        peaks,
-        duration_seconds,
-        can_delete: uploaded_by == user.id,
-    })
+    let title = format!("{name} — iggybilly");
+    page(
+        &state,
+        format,
+        &title,
+        "clip",
+        &ClipProps {
+            username: user.username,
+            clip: ClipDetail {
+                id: clip_id,
+                name,
+                original_filename,
+                content_type,
+                uploader,
+                uploaded_at: crate::datefmt::iso_date_from_rfc3339(&uploaded_at),
+                recording_date,
+                labels,
+                peaks: peaks_json(peaks),
+                duration_seconds,
+                can_delete: uploaded_by == user.id,
+            },
+        },
+    )
 }
 
-/// DELETE /clips/{id} — remove a clip the current user uploaded, along
-/// with its audio file on disk. Only the uploader may delete; anyone
-/// else gets a 403 (the button isn't shown to them, so this is the
-/// defence for a hand-crafted request). On success we tell HTMX to
-/// navigate back to the clip list, since the page we were on is gone.
+/// DELETE /api/clips/{id} — remove a clip the current user uploaded,
+/// along with its audio file on disk. Only the uploader may delete;
+/// anyone else gets a 403 (the button isn't shown to them, so this is
+/// the defence for a hand-crafted request). The client navigates back to
+/// the clip list itself, since the page it was on is now gone.
 pub async fn delete(
     State(state): State<AppState>,
     CurrentUserApi(user): CurrentUserApi,
@@ -345,10 +380,7 @@ pub async fn delete(
         tracing::warn!(error = ?e, path = %path.display(), "failed to delete audio file for removed clip");
     }
 
-    // HTMX honours HX-Redirect by doing a client-side navigation.
-    let mut headers = HeaderMap::new();
-    headers.insert("HX-Redirect", HeaderValue::from_static("/"));
-    Ok((StatusCode::OK, headers).into_response())
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 pub(super) async fn load_labels(state: &AppState, clip_id: i64) -> AppResult<Vec<ClipLabel>> {
@@ -585,7 +617,25 @@ pub async fn upload(
     }
     // One Discord post for the whole batch, fire-and-forget.
     state.discord.clips_uploaded(&user.username, &uploaded);
-    Ok(Redirect::to("/").into_response())
+
+    Ok(Json(UploadResponse {
+        clips: uploaded
+            .into_iter()
+            .map(|(id, name)| UploadedClip { id, name })
+            .collect(),
+    })
+    .into_response())
+}
+
+#[derive(Serialize)]
+struct UploadResponse {
+    clips: Vec<UploadedClip>,
+}
+
+#[derive(Serialize)]
+struct UploadedClip {
+    id: i64,
+    name: String,
 }
 
 /// Stream a multipart field to disk, enforcing MAX_UPLOAD_BYTES as we
@@ -821,66 +871,29 @@ fn find_box(
 }
 
 #[derive(Deserialize)]
-pub struct RenameForm {
+pub struct RenameRequest {
     name: String,
 }
 
-#[derive(Template)]
-#[template(path = "_clip_header.html")]
-struct ClipHeader {
-    clip_id: i64,
+#[derive(Serialize)]
+struct RenameResponse {
     name: String,
-}
-
-#[derive(Template)]
-#[template(path = "_clip_rename_form.html")]
-struct ClipRenameForm {
-    clip_id: i64,
-    name: String,
-}
-
-async fn fetch_clip_name(state: &AppState, id: i64) -> AppResult<String> {
-    let row: Option<(String,)> = sqlx::query_as("SELECT name FROM clips WHERE id = ?")
-        .bind(id)
-        .fetch_optional(&state.pool)
-        .await?;
-    Ok(row.ok_or(AppError::NotFound)?.0)
-}
-
-/// HTMX: return the rename form for the clip header.
-pub async fn rename_form(
-    State(state): State<AppState>,
-    CurrentUserApi(_user): CurrentUserApi,
-    AxumPath(id): AxumPath<i64>,
-) -> AppResult<Response> {
-    let name = fetch_clip_name(&state, id).await?;
-    render(ClipRenameForm { clip_id: id, name })
-}
-
-/// HTMX: return the read-only header (used by the form's Cancel button).
-pub async fn rename_display(
-    State(state): State<AppState>,
-    CurrentUserApi(_user): CurrentUserApi,
-    AxumPath(id): AxumPath<i64>,
-) -> AppResult<Response> {
-    let name = fetch_clip_name(&state, id).await?;
-    render(ClipHeader { clip_id: id, name })
 }
 
 pub async fn rename(
     State(state): State<AppState>,
     CurrentUserApi(_user): CurrentUserApi,
     AxumPath(id): AxumPath<i64>,
-    Form(form): Form<RenameForm>,
+    Json(req): Json<RenameRequest>,
 ) -> AppResult<Response> {
-    let new_name = form.name.trim();
+    let new_name = req.name.trim();
     if new_name.is_empty() {
         return Err(AppError::BadRequest("name can't be empty".into()));
     }
 
     // Let the UNIQUE index be the source of truth — no SELECT-then-
-    // UPDATE TOCTOU. Map a unique-violation back to a clean 409 for
-    // HTMX to display.
+    // UPDATE TOCTOU. Map a unique-violation back to a clean 409 the
+    // rename form can show inline.
     let result = sqlx::query("UPDATE clips SET name = ? WHERE id = ?")
         .bind(new_name)
         .bind(id)
@@ -889,15 +902,13 @@ pub async fn rename(
 
     match result {
         Ok(r) if r.rows_affected() == 0 => Err(AppError::NotFound),
-        Ok(_) => render(ClipHeader {
-            clip_id: id,
+        Ok(_) => Ok(Json(RenameResponse {
             name: new_name.to_string(),
-        }),
-        Err(sqlx::Error::Database(d)) if d.is_unique_violation() => Ok((
-            StatusCode::CONFLICT,
+        })
+        .into_response()),
+        Err(sqlx::Error::Database(d)) if d.is_unique_violation() => Err(AppError::Conflict(
             format!("A clip named “{new_name}” already exists."),
-        )
-            .into_response()),
+        )),
         Err(e) => Err(AppError::Sqlx(e)),
     }
 }

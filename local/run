@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+#
+# Build the app for development, then run it.
+#
+#   ./local/run serve
+#   ./local/run create-user simon --admin
+#
+# Everything after the script name goes straight to `cargo run --`. Before
+# that, this makes sure the frontend is actually built: the server refuses
+# to start without static/dist/manifest.json, and a stale bundle is worse
+# than a missing one because nothing complains about it.
+#
+# Both steps are skipped when they'd be no-ops, so the common case (run,
+# edit Rust, run again) costs one `find` and nothing else. Everything
+# happens relative to the repository root, so it works from any directory.
+
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+web="$root/web"
+manifest="$root/static/dist/manifest.json"
+
+die() {
+    echo "local/run: $*" >&2
+    exit 1
+}
+
+# Is any file under the given paths newer than the reference file?
+# Prints the first one it finds, so callers can test for a non-empty
+# result. `-print | head -1` rather than `-quit`, which isn't in every
+# find.
+newer-than() {
+    local reference="$1"
+    shift
+    find "$@" -newer "$reference" -print 2>/dev/null | head -n 1
+}
+
+command -v pnpm >/dev/null 2>&1 || die \
+    "pnpm not found on PATH. Install it with \`corepack enable && corepack prepare pnpm@latest --activate\`, or see https://pnpm.io/installation."
+command -v cargo >/dev/null 2>&1 || die \
+    "cargo not found on PATH. Install Rust from https://rustup.rs."
+
+# pnpm writes node_modules/.modules.yaml at the end of a successful
+# install, which makes it a good timestamp for "the tree matches the
+# lockfile".
+stamp="$web/node_modules/.modules.yaml"
+if [ ! -f "$stamp" ] || [ -n "$(newer-than "$stamp" "$web/pnpm-lock.yaml" "$web/package.json5")" ]; then
+    echo "local/run: installing frontend dependencies" >&2
+    (cd "$web" && pnpm install)
+fi
+
+# An unminified build with sourcemaps — this is the development entry
+# point, so a readable stack trace is worth more than a small bundle.
+if [ ! -f "$manifest" ] || [ -n "$(newer-than "$manifest" "$web/src" "$web/build.mjs" "$web/package.json5")" ]; then
+    echo "local/run: building frontend" >&2
+    (cd "$web" && pnpm run build:dev)
+fi
+
+cd "$root"
+exec cargo run -- "$@"

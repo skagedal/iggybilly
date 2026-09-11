@@ -16,7 +16,8 @@ tower-sessions-sqlx-store = { version = "0.15", features = ["sqlite"] }
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io"] }
 
-# Templates
+# Templates. Down to a single page shell now that the UI is React —
+# it renders the <script>/<link> tags and the JSON props blob.
 askama = "0.13"
 
 # DB
@@ -28,7 +29,10 @@ rand = "0.8"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# raw_value lets us pass the stored waveform peaks (already a JSON array
+# in SQLite) straight through into a response without parsing a few
+# hundred floats per clip only to re-serialise them.
+serde_json = { version = "1", features = ["raw_value"] }
 serde_urlencoded = "0.7"
 
 # HTTP client for posting Discord webhook notifications. default-features

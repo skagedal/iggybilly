@@ -1,0 +1,42 @@
+// Manifest for iggybilly-web — the React/TypeScript frontend that the
+// Rust binary serves out of ../static.
+//
+// pnpm reads package.json5 natively, so no package.json is committed or
+// generated. Nothing here is executed by Node's own resolver: build.mjs
+// is ESM by its extension, and the sources under src/ are bundled by
+// esbuild rather than imported at runtime.
+{
+  name: "iggybilly-web",
+  private: true,
+  type: "module",
+  scripts: {
+    // Production build: minified, written to ../static/dist.
+    "build": "node build.mjs",
+    // Same output, unminified — what local/run uses.
+    "build:dev": "node build.mjs --dev",
+    "dev": "node build.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "check": "pnpm run typecheck && pnpm run lint"
+  },
+  dependencies: {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "wavesurfer.js": "^7.9.0"
+  },
+  devDependencies: {
+    // Pinned to ^9: eslint-plugin-react does not yet support eslint v10.
+    // See https://github.com/jsx-eslint/eslint-plugin-react/issues/3977
+    "@eslint/js": "^9",
+    "eslint": "^9",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "esbuild": "^0.25.0",
+    "eslint-plugin-react": "^7.37.0",
+    "eslint-plugin-react-hooks": "^7.0.0",
+    "globals": "^16.0.0",
+    "typescript": "^5.8.0",
+    "typescript-eslint": "^8.0.0"
+  },
+  packageManager: "pnpm@10.33.0"
+}

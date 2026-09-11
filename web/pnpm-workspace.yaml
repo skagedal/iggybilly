@@ -1,0 +1,7 @@
+# esbuild's postinstall only re-validates the platform binary that its
+# optional dependency already installed, so there's nothing to run.
+allowBuilds:
+  esbuild: false
+# Supply-chain guard: never install a version published less than three
+# days ago (4320 minutes).
+minimumReleaseAge: 4320

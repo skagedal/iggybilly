@@ -84,18 +84,26 @@ route in `src/web.rs` calling
 
 ## Local dev
 
-Two processes. In one terminal:
+`./local/run` is the entry point. It installs the frontend dependencies
+and builds the bundles if either is missing or out of date, then hands
+everything after it to `cargo run --`:
 
-    cd web && pnpm install && pnpm run dev    # rebuilds on change
+    ./local/run create-user simon --admin
+    ./local/run serve             # listens on :9020 by default
 
-and in another:
+It works from any directory and skips both build steps when they'd be
+no-ops, so re-running after a Rust-only change costs nothing beyond
+cargo's own check. It needs `pnpm` and `cargo` on PATH and says so if
+either is missing.
 
-    cargo run -- create-user simon --admin
-    cargo run -- serve            # listens on :9020 by default
+When you're working on the frontend itself, a rebuild-on-change loop in
+a second terminal is nicer than restarting the server each time:
+
+    cd web && pnpm install && pnpm run dev
 
 Then reload the browser — there's no HMR, `pnpm run dev` just rebuilds.
 Note that the server reads the asset manifest once at startup, so if the
-bundle hashes change you need to restart `cargo run` too.
+bundle hashes change you need to restart the server too.
 
 `cd web && pnpm run check` runs `tsc` and ESLint over the frontend; CI
 runs it along with `cargo fmt --check` and the test suite.

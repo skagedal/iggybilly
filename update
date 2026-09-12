@@ -1,0 +1,227 @@
+#!/usr/bin/env bash
+#
+# Update every dependency in the repo.
+#
+#   ./update                 # all of it
+#   ./update cargo mobile    # only those parts
+#   ./update --dry-run       # print the commands, run none of them
+#
+# Version ranges stay where a human put them: Cargo.toml, web/package.json5
+# and mobile/pubspec.yaml are never written, and their lock files move
+# underneath them. Crossing a major bound is therefore still a manual edit
+# of a manifest, which is the point of writing ranges by hand.
+#
+# The two things with no lock file of their own are edited in place: the
+# Flutter SDK pin in mobile/.fvmrc, and the actions in .github/workflows.
+# There the pinned version *is* the range, so nothing would ever move if the
+# script refused to touch it. The SDK follows the newest stable release, and
+# pinact moves the actions, across majors included.
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+ALL_PARTS=(cargo web flutter mobile actions)
+
+DRY_RUN=false
+PARTS=()
+
+main() {
+    parse-args "$@"
+    local part
+    for part in "${PARTS[@]}"; do
+        "update-$part"
+    done
+    report
+}
+
+usage() {
+    cat <<'USAGE'
+usage: ./update [options] [part ...]
+
+Parts (default: all, in this order):
+  cargo     Cargo.lock, within the ranges in Cargo.toml
+  web       web/pnpm-lock.yaml, within the ranges in web/package.json5
+  flutter   the SDK pinned in mobile/.fvmrc
+  mobile    mobile/pubspec.lock, within the ranges in mobile/pubspec.yaml
+  actions   the action tags in .github/workflows
+
+Options:
+  -n, --dry-run   print what would run, change nothing
+  -h, --help      this
+USAGE
+}
+
+parse-args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help)    usage; exit 0 ;;
+            -n|--dry-run) DRY_RUN=true; shift ;;
+            -*)           die "unknown option: $1" ;;
+            *)            is-part "$1" || die "unknown part: $1 (pick from ${ALL_PARTS[*]})"
+                          PARTS+=("$1"); shift ;;
+        esac
+    done
+    [[ ${#PARTS[@]} -gt 0 ]] || PARTS=("${ALL_PARTS[@]}")
+}
+
+is-part() {
+    local part
+    for part in "${ALL_PARTS[@]}"; do
+        [[ "$part" == "$1" ]] && return 0
+    done
+    return 1
+}
+
+die()     { printf 'update: %s\n' "$*" >&2; exit 1; }
+heading() { printf '\n==> %s\n' "$*"; }
+info()    { printf '    %s\n' "$*"; }
+warn()    { printf '    !! %s\n' "$*" >&2; }
+
+require() {
+    local cmd
+    for cmd in "$@"; do
+        command -v "$cmd" >/dev/null 2>&1 || die "need $cmd on PATH"
+    done
+}
+
+# Runs the command, or prints it when --dry-run is on.
+run() {
+    if $DRY_RUN; then
+        printf '    would run: %s\n' "$*"
+        return 0
+    fi
+    printf '    $ %s\n' "$*"
+    "$@"
+}
+
+# Is $1 a strictly higher version than $2?
+version-gt() {
+    [[ "$1" != "$2" ]] && [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" == "$1" ]]
+}
+
+# How to reach the Flutter SDK the app is pinned to, which is not necessarily
+# one that is on PATH. fvm is what honours the pin; a bare flutter is the
+# fallback for a machine that installed the pinned SDK directly, as CI does.
+FLUTTER=()
+resolve-flutter() {
+    [[ ${#FLUTTER[@]} -eq 0 ]] || return 0
+    if command -v fvm >/dev/null 2>&1; then
+        FLUTTER=(fvm flutter)
+    elif command -v flutter >/dev/null 2>&1; then
+        FLUTTER=(flutter)
+    else
+        die "need fvm, or a flutter matching mobile/.fvmrc, on PATH"
+    fi
+}
+
+update-cargo() {
+    heading "Rust crates (Cargo.lock)"
+    require cargo
+    ( cd "$ROOT" && run cargo update )
+}
+
+update-web() {
+    heading "npm packages (web/pnpm-lock.yaml)"
+    require pnpm
+    # No --latest: the caret ranges in package.json5 are the range, and
+    # --no-save keeps pnpm from rewriting them. The release-age floor comes
+    # from pnpm-workspace.yaml, so it applies here without being asked for.
+    ( cd "$ROOT/web" && run pnpm update --no-save )
+}
+
+update-flutter() {
+    heading "Flutter SDK (mobile/.fvmrc)"
+    require fvm jq
+
+    # .fvmrc holds one exact version — there is no range to resolve — so the
+    # newest stable has to be looked up and written in. CI reads the same
+    # file through flutter-action, so this is the only place it is recorded.
+    local current latest
+    current="$(jq -r '.flutter' "$ROOT/mobile/.fvmrc")"
+    latest="$(fvm api releases --filter-channel stable | jq -r '.channels.stable.version')"
+
+    if ! version-gt "$latest" "$current"; then
+        info "already on $current"
+        return 0
+    fi
+    info "$current -> $latest"
+    ( cd "$ROOT/mobile" && run fvm use "$latest" )
+}
+
+update-mobile() {
+    heading "Dart packages (mobile/pubspec.lock)"
+    resolve-flutter
+    ( cd "$ROOT/mobile" && run "${FLUTTER[@]}" pub upgrade )
+    # pub's own output ends with a count of the packages held behind a caret
+    # in pubspec.yaml. That list is the one worth a human's attention.
+    info "for the ones a range is holding back: (cd mobile && fvm flutter pub outdated)"
+}
+
+update-actions() {
+    heading "GitHub Actions (.github/workflows)"
+    require pinact
+    # pinact rewrites every `uses:` to the commit SHA its tag points at and
+    # keeps the version in a trailing comment, honouring the three-day
+    # min_age in .pinact.yaml.
+    #
+    # Unauthenticated GitHub API calls are capped at 60 an hour, which one
+    # run can get through, so lend it the gh token when there is one.
+    if [[ -z "${PINACT_GITHUB_TOKEN:-}" && -z "${GITHUB_TOKEN:-}" ]] &&
+        command -v gh >/dev/null 2>&1; then
+        PINACT_GITHUB_TOKEN="$(gh auth token 2>/dev/null || true)"
+        [[ -n "$PINACT_GITHUB_TOKEN" ]] && export PINACT_GITHUB_TOKEN
+    fi
+
+    local status=0
+    if $DRY_RUN; then
+        # --diff is pinact's own dry run, and prints more than the command.
+        info "$ pinact run --update --diff"
+        ( cd "$ROOT" && pinact run --update --diff ) || status=$?
+    else
+        ( cd "$ROOT" && run pinact run --update ) || status=$?
+    fi
+    case "$status" in
+        0) ;;
+        1) ;;  # --diff saying there is something to pin, which is the point
+        2) info "pinact left something for a person to decide — a branch ref," \
+                "or a release still inside the min_age window" ;;
+        *) warn "pinact failed (exit $status)" ;;
+    esac
+}
+
+# git-pkgs keeps its index in .git/pkgs.sqlite3 and leaves creating it to the
+# caller. An index written by an older git-pkgs is worse than none: its schema
+# is one the current binary cannot write to, and that surfaces only at diff
+# time, as "table dependency_snapshots has no column named direct". Both
+# commands below do nothing when there is nothing to do, so running them every
+# time is the cheap way to never think about it again. --no-hooks keeps
+# git-pkgs from installing post-commit and post-merge hooks behind your back.
+pkgs-index-ready() {
+    git pkgs init --no-hooks -q && git pkgs upgrade -q
+}
+
+report() {
+    heading "What changed"
+    ( cd "$ROOT" && git --no-pager diff --stat -- \
+        Cargo.lock web/pnpm-lock.yaml mobile/pubspec.lock mobile/.fvmrc .github/workflows )
+
+    # git-pkgs turns a lockfile diff into a list of packages and versions,
+    # across every ecosystem at once, the actions included. Optional: with it
+    # not installed, this section is skipped. See https://github.com/git-pkgs.
+    if command -v git-pkgs >/dev/null 2>&1; then
+        heading "Package-level diff (git pkgs)"
+        (
+            cd "$ROOT"
+            if pkgs-index-ready; then
+                git pkgs diff || warn "git pkgs diff failed"
+            else
+                warn "could not prepare .git/pkgs.sqlite3, skipping the diff"
+            fi
+        )
+    fi
+
+    heading "Next"
+    info "cargo test && (cd web && pnpm run check) && (cd mobile && fvm flutter test)"
+}
+
+main "$@"

@@ -25,14 +25,16 @@
     "wavesurfer.js": "^7.9.0"
   },
   devDependencies: {
-    // Pinned to ^9: eslint-plugin-react does not yet support eslint v10.
-    // See https://github.com/jsx-eslint/eslint-plugin-react/issues/3977
-    "@eslint/js": "^9",
-    "eslint": "^9",
+    // Stands in for eslint-plugin-react, which caps its eslint peer at 9 and
+    // has not shipped since April 2025. Rule names and presets differ; the
+    // config is written against this one, not ported.
+    // https://github.com/jsx-eslint/eslint-plugin-react/issues/3977
+    "@eslint-react/eslint-plugin": "^5",
+    "@eslint/js": "^10",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "esbuild": "^0.25.0",
-    "eslint-plugin-react": "^7.37.0",
+    "eslint": "^10",
     "eslint-plugin-react-hooks": "^7.0.0",
     "globals": "^16.0.0",
     "typescript": "^5.8.0",

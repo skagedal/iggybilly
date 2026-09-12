@@ -17,6 +17,10 @@ Android in [`mobile/`](mobile/), talking to the same server.
 - Each clip shows its waveform, and playing one loads it into a single
   player bar fixed to the bottom of the page. The bar keeps playing as
   you move around the site; playing another clip takes it over.
+- Clicking the bar opens the player: the whole waveform, both times, skip
+  buttons, and a repeat toggle that loops the clip. Repeat is remembered
+  between visits, and is the media element's own looping, so it is
+  gapless — which matters when the clip is one bar long.
 - Each clip can have any number of labels (lower-kebab-case, with
   Unicode letters allowed: `verse-1`, `pålägg`, `café-version`). Adding
   a label autocompletes against existing labels and offers to create a
@@ -28,6 +32,10 @@ Android in [`mobile/`](mobile/), talking to the same server.
   restore. Filtering by a label shows its page above the clips.
 - The phone app does all of the above, and adds a list of the devices
   you are signed in on, any of which you can sign out from any other.
+- The phone app also keeps clips on disk: played clips are cached up to a
+  size you choose and evicted least-recently-played first, and any clip
+  can be marked "keep downloaded" to stay put and play with no network.
+  See [`mobile/README.md`](mobile/README.md).
 
 ## How the frontend fits together
 

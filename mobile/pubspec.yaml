@@ -38,6 +38,15 @@ dependencies:
   # flutter_markdown is discontinued; this is its maintained successor.
   flutter_markdown_plus: ^1.0.12
 
+  # Where the clips kept on disk live. The directory has to come from
+  # the platform, and it is the *support* directory rather than the cache
+  # one: iOS may empty Library/Caches whenever it likes, and a clip the
+  # user asked to keep is the one file here that must not vanish.
+  path_provider: ^2.1.6
+  # Joining and splitting those paths. Direct rather than borrowed
+  # transitively, because the cache uses it.
+  path: ^1.9.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

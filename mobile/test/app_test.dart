@@ -1,9 +1,11 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:iggybilly/src/auth/session.dart';
+import 'package:iggybilly/src/cache/track_cache.dart';
 import 'package:iggybilly/src/ui/app.dart';
 
 import 'fakes.dart';
@@ -81,6 +83,13 @@ class FakeServer {
       return ok(list);
     }
 
+    // Clip audio, which is not under /api/v1: what the player loads and
+    // what the cache downloads. Any bytes will do.
+    final audioMatch = RegExp(r'^/clips/(\d+)/audio$').firstMatch(path);
+    if (audioMatch != null) {
+      return http.Response('audio for clip ${audioMatch.group(1)}', 200);
+    }
+
     if (path == '/api/v1/labels/search') {
       return ok({'query': 'chorus', 'matches': <String>[], 'canCreate': true});
     }
@@ -114,6 +123,7 @@ Future<FakeEngine> pumpApp(
   WidgetTester tester,
   FakeServer server, {
   bool signedIn = true,
+  TrackCache? cache,
 }) async {
   final engine = FakeEngine();
   final session = Session(
@@ -123,7 +133,9 @@ Future<FakeEngine> pumpApp(
     defaultServer: Uri.parse('https://example.test'),
   );
 
-  await tester.pumpWidget(IggybillyApp(session: session, engine: engine));
+  await tester.pumpWidget(
+    IggybillyApp(session: session, engine: engine, cache: cache),
+  );
   await tester.pumpAndSettle();
   return engine;
 }
@@ -199,6 +211,104 @@ void main() {
         'https://example.test/clips/1/audio');
     expect(engine.lastHeaders['Authorization'], 'Bearer tok');
     expect(engine.playCalls, 1);
+  });
+
+  testWidgets('a clip offers to be kept on the phone', (tester) async {
+    final server = FakeServer();
+    late Directory directory;
+    late TrackCache cache;
+    // Inside runAsync: a widget test's clock is fake, and real file I/O
+    // does not progress under it — an `await` on it outside here never
+    // returns. What the switch then *does* is the cache's own tests,
+    // which run on a real event loop.
+    await tester.runAsync(() async {
+      directory = await Directory.systemTemp.createTemp('iggybilly-app');
+      cache = TrackCache(
+        locate: () async => directory,
+        httpClient: server.client,
+      );
+      await cache.open();
+    });
+    addTearDown(() => directory.deleteSync(recursive: true));
+
+    await pumpApp(tester, server, cache: cache);
+    await tester.tap(find.text('riff'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Keep downloaded'), findsOneWidget);
+    expect(
+      find.text('Download it and keep it for offline listening.'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('with nowhere to keep clips, nothing offers to', (tester) async {
+    final server = FakeServer();
+    final cache = TrackCache(
+      locate: () async => throw const FileSystemException('no'),
+      httpClient: server.client,
+    );
+    await cache.open();
+
+    await pumpApp(tester, server, cache: cache);
+    await tester.tap(find.text('riff'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Keep downloaded'), findsNothing);
+  });
+
+  testWidgets('a clip that will not play says so rather than just vanishing',
+      (tester) async {
+    final server = FakeServer();
+    final engine = await pumpApp(tester, server);
+    engine.loadError = Exception('the file is not there');
+
+    await tester.tap(find.byIcon(Icons.play_circle).first);
+    await tester.pumpAndSettle();
+
+    expect(find.text('That clip could not be played.'), findsOneWidget);
+    expect(find.byIcon(Icons.pause), findsNothing, reason: 'no bar for it');
+  });
+
+  testWidgets('tapping the bar opens the player, which can repeat',
+      (tester) async {
+    final server = FakeServer();
+    final engine = await pumpApp(tester, server);
+
+    await tester.tap(find.byIcon(Icons.play_circle).first);
+    await tester.pumpAndSettle();
+
+    // The bar's caption; the list row behind it shows the same name, so
+    // the last one in the tree is the bar's.
+    await tester.tap(find.text('riff').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Open clip'), findsOneWidget);
+    expect(find.byIcon(Icons.replay_10), findsOneWidget);
+    expect(find.byIcon(Icons.repeat), findsOneWidget);
+
+    await tester.tap(find.byIcon(Icons.repeat));
+    await tester.pumpAndSettle();
+
+    // Looping is the platform's job, and gapless there.
+    expect(engine.repeat, isTrue);
+    expect(find.byIcon(Icons.repeat_one), findsWidgets);
+  });
+
+  testWidgets('the player pane opens the clip it is playing', (tester) async {
+    final server = FakeServer();
+    await pumpApp(tester, server);
+
+    await tester.tap(find.byIcon(Icons.play_circle).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('riff').last);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Open clip'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Open clip'), findsNothing, reason: 'the pane closed');
+    expect(find.text('Uploaded by'), findsOneWidget);
   });
 
   testWidgets('the bar survives navigating to a clip and back',

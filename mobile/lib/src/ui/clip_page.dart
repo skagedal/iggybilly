@@ -5,6 +5,7 @@ import '../api/models.dart';
 import '../format.dart';
 import 'app_scope.dart';
 import 'common.dart';
+import 'keep_downloaded.dart';
 import 'label_picker.dart';
 import 'waveform.dart';
 import 'wiki_page.dart';
@@ -220,7 +221,9 @@ class _ClipPageState extends State<ClipPage> {
               );
             },
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 16),
+          KeepDownloadedTile(clip: clip),
+          const SizedBox(height: 16),
           _Facts(clip: clip),
           const SizedBox(height: 24),
           Row(

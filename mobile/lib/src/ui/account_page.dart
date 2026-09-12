@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import '../api/client.dart';
 import '../api/models.dart';
 import '../format.dart';
+import 'app_scope.dart';
 import 'common.dart';
+import 'storage_page.dart';
 
 /// The account: who you are, which devices are signed in, and the way
 /// out.
@@ -102,6 +104,17 @@ class _AccountPageState extends State<AccountPage> {
               subtitle: Text(session.server.toString()),
             ),
             const Divider(),
+            if (AppScope.of(context).cache case final cache?)
+              ListTile(
+                leading: const Icon(Icons.download_outlined),
+                title: const Text('Downloads'),
+                subtitle: const Text(
+                  'How much of the band is kept on this phone',
+                ),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => StoragePage(cache: cache)),
+                ),
+              ),
             ListTile(
               leading: const Icon(Icons.lock_outline),
               title: const Text('Change password'),

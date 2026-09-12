@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../format.dart';
 import '../player/player_controller.dart';
+import 'player_sheet.dart';
 import 'waveform.dart';
 
 /// The bar along the bottom, above every screen.
@@ -14,7 +15,8 @@ class PlayerBar extends StatelessWidget {
 
   final PlayerController player;
 
-  /// Tapping the name opens the clip. Null while there is nowhere to go.
+  /// Opens a clip's own screen, from the pane the bar raises. Null while
+  /// there is nowhere to go.
   final ValueChanged<int>? onOpenClip;
 
   @override
@@ -29,6 +31,11 @@ class PlayerBar extends StatelessWidget {
 
         final theme = Theme.of(context);
         final total = player.duration;
+        void open() => showPlayerSheet(
+              context,
+              player: player,
+              onOpenClip: onOpenClip,
+            );
         return Material(
           color: theme.colorScheme.surfaceContainerHigh,
           child: SafeArea(
@@ -50,14 +57,34 @@ class PlayerBar extends StatelessWidget {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         GestureDetector(
-                          onTap: onOpenClip == null
-                              ? null
-                              : () => onOpenClip!(clip.id),
-                          child: Text(
-                            clip.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: theme.textTheme.bodyMedium,
+                          // Everything but the play button and the
+                          // waveform raises the pane. The waveform keeps
+                          // seeking: a bar you cannot scrub would be a
+                          // worse bar than one without a pane.
+                          behavior: HitTestBehavior.opaque,
+                          onTap: open,
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  clip.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.bodyMedium,
+                                ),
+                              ),
+                              if (player.repeat)
+                                Icon(
+                                  Icons.repeat_one,
+                                  size: 14,
+                                  color: theme.colorScheme.primary,
+                                ),
+                              Icon(
+                                Icons.keyboard_arrow_up,
+                                size: 18,
+                                color: theme.colorScheme.outline,
+                              ),
+                            ],
                           ),
                         ),
                         const SizedBox(height: 2),
@@ -71,11 +98,15 @@ class PlayerBar extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 10),
-                  Text(
-                    total == null
-                        ? formatDuration(player.position)
-                        : '${formatDuration(player.position)} / ${formatDuration(total)}',
-                    style: theme.textTheme.labelSmall,
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: open,
+                    child: Text(
+                      total == null
+                          ? formatDuration(player.position)
+                          : '${formatDuration(player.position)} / ${formatDuration(total)}',
+                      style: theme.textTheme.labelSmall,
+                    ),
                   ),
                 ],
               ),

@@ -7,6 +7,89 @@ It talks to `/api/v1` on your own iggybilly server — see `src/api/` in
 the crate above for that surface, and for why it is separate from the
 JSON the React frontend consumes.
 
+## The player
+
+One `PlayerController` (`lib/src/player/`) lives above the navigator, so
+walking from the list to a clip to a wiki page never interrupts playback.
+Tapping the bar raises the whole player: the full waveform, both times,
+ten-second skips, a repeat toggle, and the switch that keeps the clip on
+the phone.
+
+Repeat is `LoopMode.one` on the platform player rather than a seek when
+the clip ends. That makes it gapless on both platforms, which is the
+whole point when the clip is a two-bar riff.
+
+Two things in here exist because of specific bugs, and are worth knowing
+about before either is "simplified":
+
+- **`RecoveringAudioEngine`** throws the platform player away and builds a
+  new one when a load fails. A `just_audio` player that has failed once
+  can stay unusable for every source after it, which showed up as: press
+  play, the bar flashes up and vanishes, and every clip behaves that way
+  until the app is force-quit. Force-quitting worked because it was the
+  only thing that built a new player.
+- **The generation counter in `PlayerController.play`.** Loading is
+  asynchronous and can fail long after the fact, so a load that has been
+  superseded must not write state for a clip that is no longer on screen.
+  Without it, pressing play on a second clip while the first was still
+  loading let the first one's failure unload the second.
+
+## Clips on disk
+
+`TrackCache` (`lib/src/cache/`) keeps two kinds of thing in one
+directory under the app support directory:
+
+- **Cached clips.** Playing a clip copies it here in the background — the
+  first play still streams, so nothing waits on a download. Once the
+  total passes the ceiling set on Account → Downloads, the clip nobody
+  has played for longest is deleted.
+- **Kept clips.** "Keep downloaded", on a clip or in the player,
+  downloads it now and keeps it until that is turned off. Kept clips are
+  *not* counted against the ceiling and are never evicted: a budget for
+  what the app may guess at should not be spent on what was asked for.
+
+A clip already on disk plays from the file, with no request at all. If the
+local copy turns out not to play — truncated by a crash, say — it is
+forgotten and the clip is fetched from the server instead, so a bad file
+costs one slow play rather than a clip that never works again.
+
+The support directory rather than the cache directory, deliberately: iOS
+may empty `Library/Caches` whenever it likes, and a clip the user asked to
+keep is the one file here that must not vanish. The cost is that the
+directory is included in backups.
+
+Everything about the cache is best-effort. No writable directory, a failed
+download, a full phone: each of those means the clip streams, which is
+what the app did before any of this existed.
+
+## Playing in the background
+
+Both platforms are set up for it: `UIBackgroundModes: audio` in
+`ios/Runner/Info.plist`, and `AudioSessionConfiguration.music()` on the
+audio session.
+
+Configuring the session is only half of it, though, and the other half is
+what made clips stop mid-listen with the phone in a pocket. A call, an
+alarm, a navigation instruction or another app taking the session pauses
+the platform player, and *nothing starts it again unless the app does*.
+`JustAudioEngine` now answers `interruptionEventStream`: it ducks for a
+duck, pauses for a pause, and starts again afterwards if it was the one
+playing when the interruption began — but never after an interruption the
+platform describes as possibly indefinite, because that is how two apps
+end up playing at once. It answers `becomingNoisyEventStream` too, so
+pulling headphones out pauses rather than switching to the phone's own
+speaker.
+
+Fetching audio is *not* what stops playback on iOS: an app with the audio
+background mode that is producing audio is allowed to use the network.
+Android is the weaker side — there is no foreground service, so the OS is
+free to freeze the process once the app is backgrounded. Playing from a
+cached file removes the network from the question, but the process itself
+is still at the OS's discretion. The fix, when it is wanted, is
+`just_audio_background` (a foreground service plus lock-screen controls);
+the manifest already carries the `FOREGROUND_SERVICE`,
+`FOREGROUND_SERVICE_MEDIA_PLAYBACK` and `WAKE_LOCK` permissions it needs.
+
 ## Running it
 
 The Flutter SDK is pinned in `.fvmrc` and managed with
@@ -77,13 +160,23 @@ constructor:
 | Plain Dart | The platform behind it |
 |---|---|
 | `PlayerController` | `AudioEngine` → `JustAudioEngine` |
+| `RecoveringAudioEngine` | another `AudioEngine` |
 | `Session` | `CredentialStore` → `SecureCredentialStore` |
+| `TrackCache` | a `Directory` it is handed, and an `http.Client` |
+| `PlayerController` | `Settings` → `PrefsSettings` |
 | `IggybillyApi` | an `http.Client` |
 
-`test/` fakes all three, and the widget tests in `test/app_test.dart`
+`RecoveringAudioEngine` is on that list for a reason: taking the platform
+as a factory for another `AudioEngine`, rather than reaching for
+`AudioPlayer` itself, is what makes "a failed load is retried on a new
+player" a test rather than a hope. The cache takes its directory as a
+`Future<Directory> Function()` for the same kind of reason — the real one
+comes from `path_provider`, a test's comes from `systemTemp`.
+
+`test/` fakes all of them, and the widget tests in `test/app_test.dart`
 drive the real screens against a scripted server — signing in, playing,
-renaming, filtering, editing a wiki page, being signed out by a revoked
-token.
+opening the player, renaming, filtering, editing a wiki page, being
+signed out by a revoked token.
 
 **The player is one object, above the navigator.** `PlayerBar` sits
 outside the `Navigator` in `ui/app.dart`, so walking from the list to a
@@ -104,6 +197,10 @@ screen rather than a password change that signs out everything.
 
 - iOS declares the `audio` background mode and Android takes the
   media-playback foreground-service permissions, so a clip keeps playing
-  with the screen off.
+  with the screen off. See "Playing in the background" above for what
+  that does and does not cover.
+- The local copy of a clip is given the extension its content type
+  implies. AVPlayer takes the extension of a local file as its first hint
+  at the container and gets less forgiving the less it has to go on.
 - Uploads are read into memory, which is fine because the server caps a
   clip at 10 MB and the picker is limited to the formats it accepts.

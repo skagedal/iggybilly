@@ -391,19 +391,33 @@ body.has-player { padding-bottom: 5rem; }
   font-size: 1rem;
 }
 .gp-waveform { flex: 1 1 auto; min-width: 0; min-height: 40px; }
+/* The name and the time both raise the pane, so both are buttons that
+   do not look like buttons. */
 .gp-name {
   flex: 0 1 auto;
   max-width: 16rem;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
   color: var(--fg);
   font-weight: 600;
-  text-decoration: none;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .gp-name:hover { text-decoration: underline; }
+.gp-repeat { color: var(--accent); font-weight: 400; }
 .gp-time {
   flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
   color: var(--muted);
   font-family: ui-monospace, monospace;
   font-size: 0.85rem;
@@ -421,6 +435,101 @@ body.has-player { padding-bottom: 5rem; }
 
 @media (max-width: 480px) {
   .gp-name { display: none; }
+}
+
+/* --------------------------------------------------------------------
+   The player, opened up.
+
+   Rendered after the bar in the DOM and positioned just above it, so the
+   bar's waveform host — which the WaveSurfer instance is bound to — never
+   moves in the tree. Its own waveform is a canvas drawn from the stored
+   peaks, which is a second picture of the same clip rather than a second
+   player.
+   -------------------------------------------------------------------- */
+.player-pane {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 4.4rem;
+  width: min(40rem, calc(100vw - 2rem));
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem 1.25rem 1.25rem;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.14);
+  z-index: 60;
+}
+
+.pp-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+.pp-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+.pp-close {
+  flex: 0 0 auto;
+  padding: 0 0.4rem;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-size: 1.5rem;
+  line-height: 1;
+  color: var(--muted);
+}
+.pp-close:hover { color: var(--fg); }
+
+.pp-times {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+}
+
+.pp-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.pp-play {
+  width: 3rem;
+  height: 3rem;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 1.2rem;
+}
+.pp-skip {
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+}
+/* Repeat is a state, not an action, so it stays lit while it is on. */
+.pp-repeat {
+  font-size: 1.2rem;
+  line-height: 1;
+  padding: 0.35rem 0.6rem;
+}
+.pp-repeat.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+.pp-open {
+  margin-left: auto;
+  color: var(--accent);
+  font-size: 0.9rem;
+}
+@media (max-width: 480px) {
+  .pp-open { margin-left: 0; }
 }
 
 /* Thin bar across the top while a client navigation is in flight. It

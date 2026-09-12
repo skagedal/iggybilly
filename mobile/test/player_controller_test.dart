@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:iggybilly/src/api/models.dart';
 import 'package:iggybilly/src/player/audio_engine.dart';
 import 'package:iggybilly/src/player/player_controller.dart';
+import 'package:iggybilly/src/settings.dart';
 
 /// An engine that does nothing but remember what it was told, and let a
 /// test push positions and durations at its own pace.
@@ -28,9 +29,25 @@ class FakeEngine implements AudioEngine {
   /// Set to make `load` fail, as a missing or undecodable file does.
   Object? loadError;
 
+  /// Set to fail only some sources — a local file that will not play
+  /// while the same clip streams perfectly well, say.
+  Object? Function(Uri url)? loadErrorFor;
+
+  /// Held open to park a load mid-flight, which is how a test arranges
+  /// for one load to finish after a later one has taken over.
+  Completer<void>? gate;
+
+  /// What the platform was last told about looping.
+  bool repeat = false;
+
   @override
   Future<Duration?> load(Uri url, {Map<String, String> headers = const {}}) async {
-    if (loadError != null) throw loadError!;
+    // Captured on the way in, so that a test can change what the *next*
+    // load does while this one is still parked on [gate].
+    final held = gate;
+    final error = loadErrorFor?.call(url) ?? loadError;
+    if (held != null) await held.future;
+    if (error != null) throw error;
     loaded.add(url);
     lastHeaders = headers;
     return reportedDuration;
@@ -50,6 +67,9 @@ class FakeEngine implements AudioEngine {
 
   @override
   Future<void> seek(Duration position) async => lastSeek = position;
+
+  @override
+  Future<void> setRepeat(bool value) async => repeat = value;
 
   @override
   Future<void> stop() async => stopped = true;
@@ -269,5 +289,128 @@ void main() {
     engine.positionController.add(const Duration(seconds: 1));
     await pumpEventQueue();
     expect(notifications, greaterThan(0));
+  });
+
+  test('a load that fails after a later one started is ignored', () async {
+    // The bug this guards: pressing play on one clip while another was
+    // still loading let the first clip's failure unload the second, so
+    // the bar appeared for an instant and vanished.
+    final gate = Completer<void>();
+    engine.gate = gate;
+    engine.loadError = Exception('the platform gave up on this one');
+    final first = player.play(clipFixture(id: 1), Uri.parse('https://e.test/1'));
+
+    engine.gate = null;
+    engine.loadError = null;
+    await player.play(clipFixture(id: 2, name: 'bridge'), Uri.parse('https://e.test/2'));
+
+    gate.complete();
+    await first;
+
+    expect(player.clip?.id, 2, reason: 'the stale failure did not unload it');
+    expect(player.error, isNull);
+  });
+
+  test('a load that succeeds after a later one started is ignored', () async {
+    final gate = Completer<void>();
+    engine.gate = gate;
+    engine.reportedDuration = const Duration(seconds: 99);
+    final first = player.play(clipFixture(id: 1), Uri.parse('https://e.test/1'));
+
+    engine.gate = null;
+    engine.reportedDuration = const Duration(seconds: 5);
+    await player.play(
+      clipFixture(id: 2, name: 'bridge'),
+      Uri.parse('https://e.test/2'),
+    );
+
+    gate.complete();
+    await first;
+    await pumpEventQueue();
+
+    expect(player.clip?.id, 2);
+    expect(player.duration, const Duration(seconds: 5),
+        reason: "the abandoned clip's length is not this clip's");
+  });
+
+  test('repeat reaches the platform and is remembered', () async {
+    final settings = InMemorySettings();
+    final controller = PlayerController(engine: engine, settings: settings);
+    addTearDown(controller.dispose);
+
+    await controller.setRepeat(true);
+    expect(controller.repeat, isTrue);
+    expect(engine.repeat, isTrue, reason: 'the platform loops it, gaplessly');
+    expect(settings.repeat, isTrue);
+
+    await controller.toggleRepeat();
+    expect(controller.repeat, isFalse);
+    expect(engine.repeat, isFalse);
+    expect(settings.repeat, isFalse);
+  });
+
+  test('repeat is picked back up on the next launch', () async {
+    final controller = PlayerController(
+      engine: engine,
+      settings: InMemorySettings(repeat: true),
+    );
+    addTearDown(controller.dispose);
+
+    await controller.restore();
+
+    expect(controller.repeat, isTrue);
+    expect(engine.repeat, isTrue);
+  });
+
+  test('reaching the end with repeat on starts the clip again', () async {
+    await player.setRepeat(true);
+    await player.play(clipFixture(), Uri.parse('https://e.test/1'));
+    await pumpEventQueue();
+    final playsBefore = engine.playCalls;
+
+    // The platform loops this itself, so a completion arriving at all
+    // means it didn't — and the clip still has to start again.
+    engine.completionController.add(null);
+    await pumpEventQueue();
+
+    expect(player.clip, isNotNull);
+    expect(player.position, Duration.zero);
+    expect(engine.lastSeek, Duration.zero);
+    expect(engine.playCalls, playsBefore + 1);
+  });
+
+  test('reaching the end with repeat off still stops', () async {
+    await player.play(clipFixture(), Uri.parse('https://e.test/1'));
+    await pumpEventQueue();
+    final playsBefore = engine.playCalls;
+
+    engine.completionController.add(null);
+    await pumpEventQueue();
+
+    expect(player.isPlaying, isFalse);
+    expect(engine.playCalls, playsBefore);
+  });
+
+  test('skipping moves by the offset and stays inside the clip', () async {
+    await player.play(
+      clipFixture(duration: const Duration(seconds: 60)),
+      Uri.parse('https://e.test/1'),
+    );
+    engine.positionController.add(const Duration(seconds: 30));
+    await pumpEventQueue();
+
+    await player.skip(const Duration(seconds: 10));
+    expect(engine.lastSeek, const Duration(seconds: 40));
+
+    await player.skip(const Duration(seconds: -60));
+    expect(engine.lastSeek, Duration.zero, reason: 'no negative positions');
+
+    await player.skip(const Duration(seconds: 600));
+    expect(engine.lastSeek, const Duration(seconds: 60), reason: 'clamped');
+  });
+
+  test('skipping is ignored with nothing loaded', () async {
+    await player.skip(const Duration(seconds: 10));
+    expect(engine.lastSeek, isNull);
   });
 }

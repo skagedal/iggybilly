@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 
 import '../auth/session.dart';
+import '../cache/track_cache.dart';
 import '../player/audio_engine.dart';
 import '../player/player_controller.dart';
+import '../player/recovering_engine.dart';
+import '../settings.dart';
 import 'app_scope.dart';
 import 'clip_page.dart';
 import 'clips_page.dart';
@@ -13,16 +16,27 @@ import 'theme.dart';
 
 /// The app.
 ///
-/// Owns the two long-lived objects — the session and the player — and
-/// decides which of the two worlds is on screen: signed in, or not.
-/// Nothing below has to think about that.
+/// Owns the long-lived objects — the session, the player and the clips on
+/// disk — and decides which of the two worlds is on screen: signed in, or
+/// not. Nothing below has to think about that.
 class IggybillyApp extends StatefulWidget {
-  const IggybillyApp({super.key, required this.session, this.engine});
+  const IggybillyApp({
+    super.key,
+    required this.session,
+    this.engine,
+    this.cache,
+    this.settings,
+  });
 
   final Session session;
 
   /// Injectable so a test can drive the app without a platform player.
   final AudioEngine? engine;
+
+  /// Injectable for the same reason, and null in tests that have no
+  /// business touching the filesystem.
+  final TrackCache? cache;
+  final Settings? settings;
 
   @override
   State<IggybillyApp> createState() => _IggybillyAppState();
@@ -30,7 +44,11 @@ class IggybillyApp extends StatefulWidget {
 
 class _IggybillyAppState extends State<IggybillyApp> {
   late final PlayerController _player = PlayerController(
-    engine: widget.engine ?? JustAudioEngine(),
+    // A player that has failed once must not stay failed: see
+    // [RecoveringAudioEngine], which is the whole of that fix.
+    engine: widget.engine ?? RecoveringAudioEngine(JustAudioEngine.new),
+    cache: widget.cache,
+    settings: widget.settings,
   );
 
   /// The key for the signed-in navigator, so the player bar — which
@@ -40,15 +58,18 @@ class _IggybillyAppState extends State<IggybillyApp> {
   @override
   void initState() {
     super.initState();
-    // Not awaited: the first frame is the splash below, and the session
-    // flips the tree over when it knows.
+    // None awaited: the first frame is the splash below, and each of
+    // these flips part of the tree over when it knows something.
     widget.session.restore();
+    widget.cache?.open();
+    _player.restore();
   }
 
   @override
   void dispose() {
     _player.dispose();
     widget.session.dispose();
+    widget.cache?.dispose();
     super.dispose();
   }
 
@@ -67,6 +88,7 @@ class _IggybillyAppState extends State<IggybillyApp> {
     return AppScope(
       session: widget.session,
       player: _player,
+      cache: widget.cache,
       child: MaterialApp(
         title: 'iggybilly',
         debugShowCheckedModeBanner: false,
@@ -82,9 +104,12 @@ class _IggybillyAppState extends State<IggybillyApp> {
               case SessionStatus.signedOut:
                 return const SignInPage();
               case SessionStatus.signedIn:
-                return _SignedIn(
-                  navigatorKey: _navigatorKey,
+                return _PlayerErrors(
                   player: _player,
+                  child: _SignedIn(
+                    navigatorKey: _navigatorKey,
+                    player: _player,
+                  ),
                 );
             }
           },
@@ -92,6 +117,51 @@ class _IggybillyAppState extends State<IggybillyApp> {
       ),
     );
   }
+}
+
+/// Says so out loud when a clip would not play.
+///
+/// The controller has recorded these failures for a long time and nothing
+/// ever read them, so a clip that could not load made the bar appear and
+/// vanish with no explanation — which is a confusing thing to watch,
+/// especially since it is usually worth trying again.
+class _PlayerErrors extends StatefulWidget {
+  const _PlayerErrors({required this.player, required this.child});
+
+  final PlayerController player;
+  final Widget child;
+
+  @override
+  State<_PlayerErrors> createState() => _PlayerErrorsState();
+}
+
+class _PlayerErrorsState extends State<_PlayerErrors> {
+  @override
+  void initState() {
+    super.initState();
+    widget.player.addListener(_onPlayerChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.player.removeListener(_onPlayerChanged);
+    super.dispose();
+  }
+
+  void _onPlayerChanged() {
+    final message = widget.player.error;
+    if (message == null) return;
+    // After the frame, not during it: a notification can arrive while the
+    // tree is being built, and showing a snack bar then is an error.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || widget.player.error == null) return;
+      showMessage(context, message, isError: true);
+      widget.player.clearError();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 /// The signed-in world: a navigator with the player bar pinned beneath

@@ -1,6 +1,8 @@
 # Comments anchored to a point in a clip
 
 Implements [#6](https://github.com/skagedal/iggybilly/issues/6).
+Complements [001](../implemented/001-label-wiki.md), whose storage
+decision it reuses.
 
 The thing worth saying about a clip is almost always about a moment in
 it: the entry is late, that chord is wrong, do that again. Saying it in
@@ -14,7 +16,7 @@ already talks and a comment nobody sees is not worth writing.
 Comments resemble wiki pages in shape — user-authored text hanging off
 something else, with an author and a time — and borrow their storage
 decision wholesale: Markdown source in the column, rendered on read by
-each surface. See [the wiki spec](../implemented/label-wiki.md), which
+each surface. See [spec 001](../implemented/001-label-wiki.md), which
 sets out why. The one place they differ is versioning: a wiki page keeps
 every revision and a comment does not.
 
@@ -106,7 +108,7 @@ Any signed-in user may comment on any clip and reply in any thread.
 
 Comments are **Markdown**, stored as source and rendered on read. That is
 what the wiki already does, and the reasoning carries over unchanged: see
-[the wiki spec](../implemented/label-wiki.md). The stored form is the
+[spec 001](../implemented/001-label-wiki.md). The stored form is the
 text the author typed; the HTML the web serves and the widget tree the
 phone builds are both derived from it, by each surface, at read time.
 

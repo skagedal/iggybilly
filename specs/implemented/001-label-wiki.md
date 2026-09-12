@@ -1,12 +1,15 @@
-# Label wiki pages
+# 001. Label wiki pages
+
+Status: **accepted**, and in production since `migrations/0003_label_wiki.sql`.
 
 Shipped before this directory existed, and written down afterwards from
-the code. It is here because two later specs argue from it — the comments
-spec takes its storage decision from this one — and an argument that
+the code. It is here because a later spec argues from it — the comments
+draft takes its storage decision from this one — and an argument that
 points at a file is weaker than one that points at a written reason.
 
-Read it as a description of what was decided, not as a plan. Where the
-prose says "is", it is.
+Read it as a record of what was decided, not as a plan and not as a
+description of the system as it stands today. Where the prose says "is",
+read "was, when this was written".
 
 ## Functionality
 

@@ -18,14 +18,21 @@ Android in [`mobile/`](mobile/), talking to the same server.
   player bar fixed to the bottom of the page. The bar keeps playing as
   you move around the site; playing another clip takes it over.
 - Clicking the bar opens the player: the whole waveform, both times, skip
-  buttons, and a repeat toggle that loops the clip. Repeat is remembered
-  between visits, and is the media element's own looping, so it is
-  gapless — which matters when the clip is one bar long.
+  buttons, and a repeat toggle. Repeat is remembered between visits, and
+  when the player holds a single clip it is the media element's own
+  looping, so it is gapless — which matters when the clip is one bar
+  long. When a playlist is playing, repeat wraps from its last clip back
+  to the first instead, and the element does not loop.
 - Each clip can have any number of labels (lower-kebab-case, with
   Unicode letters allowed: `verse-1`, `pålägg`, `café-version`). Adding
   a label autocompletes against existing labels and offers to create a
   new one when the input is a valid format and doesn't exist yet.
 - Clips can be filtered by clicking labels (AND semantics with multiple).
+- Filtering by exactly one label shows that label's playlist: its clips
+  in an order anyone can drag them into, shared by everyone. Pressing
+  play there plays on through the rest of the list, with previous, next
+  and the queue itself in the player. See
+  [`specs/implemented/002-playlists-from-labels.md`](specs/implemented/002-playlists-from-labels.md).
 - Each clip has a download link that serves the original upload bytes
   with `Content-Disposition: attachment` and the original filename.
 - Each label can have a Markdown wiki page, with full edit history and

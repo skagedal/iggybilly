@@ -148,8 +148,10 @@ single take on a loop is to play it from its own page, which is where you
 already are when you want that. A mode that exists to reproduce what
 another screen already does is a button people have to think about.
 
-The glyph stays `⟳` on the web and `Icons.repeat` on the phone, lit when
-on, exactly as now.
+The glyph stays `⟳` on the web, lit when on, exactly as now. The phone
+used to swap `Icons.repeat` for `Icons.repeat_one` when on, which would
+now say the wrong thing in a playlist, so it keeps `Icons.repeat` and
+lights it, as the web does.
 
 **Gaplessness is preserved.** The README is explicit that repeat today is
 the media element's own looping because a one-bar riff repeated with a
@@ -181,10 +183,10 @@ which is the better of the two. The pane gains, in order down the panel:
 - the track name, and under it a subtitle of uploader and recording date,
   as the phone's sheet has;
 - the waveform and both times, unchanged;
-- a controls row of **repeat · previous · play · next · forward**, with
-  play as the large filled button in the middle and the skips folded onto
-  the outer buttons as they are on the phone. Previous and next are
-  hidden, not disabled, when the queue holds one track;
+- a controls row of **repeat · back · previous · play · next · forward**,
+  with play as the large filled button in the middle and the ten-second
+  skips outside previous and next. Previous and next are hidden, not
+  disabled, when the queue holds one track;
 - the "Playing from …" line, expandable into the queue;
 - "Open clip", unchanged.
 
@@ -212,8 +214,7 @@ client's existing "Couldn't reach …" wording.
 
 ### Database
 
-`migrations/0005_playlist_order.sql` — number it whatever is next when it
-lands.
+`migrations/0005_playlist_order.sql`:
 
 ```sql
 -- The clips carrying a label form a playlist, and a playlist has an
@@ -265,8 +266,6 @@ the column is not.
 - `add_to_clip` sets `position` to `COALESCE(MAX(position), -1024) + 1024`
   for that label, inside the transaction it already opens, so a newly
   labelled clip lands at the end.
-- `playlist(pool, label_id) -> Vec<i64>` — the label's clip ids in
-  `(position, clip_id)` order.
 - `reorder(pool, label_id, clip_id, after_clip_id: Option<i64>) -> Vec<i64>`
   — the whole of the ordering logic, in one transaction:
   1. read the label's rows in order;
@@ -287,8 +286,11 @@ the column is not.
 - `list` gains the ordering. Its signature becomes
   `list(pool, active: &[&str], order: ListOrder)` with
   `ListOrder::Recent` (today's `ORDER BY c.uploaded_at DESC`) and
-  `ListOrder::Playlist { label_id }` (`ORDER BY cl.position, c.id` on the
-  join it already makes). The caller decides, because "is this a
+  `ListOrder::Playlist { label_id }`, which joins its own copy of
+  `clip_labels` for that one label and orders by `ord.position, c.id`.
+  The join the filter already makes cannot be used: the query groups by
+  clip to count distinct labels, so a position read from it would come
+  from an arbitrary row. The caller decides, because "is this a
   playlist view" is a question about the request, not about the data.
 - `Clip` gains nothing. A clip's position is a property of the list it
   was read as part of, and putting it on the clip would be the per-clip
@@ -370,27 +372,42 @@ route otherwise.
 The shared model is the same on each side, and it is worth keeping the
 names the same:
 
-    Queue { source: string | null, tracks: Track[], currentClipId: number }
+    Queue { source: string | null, tracks: Track[], resumeAt: number | null }
 
 `source` is the label name, or null for a queue that came from somewhere
-else. The current track is found by id, not held as an index, so a
-reorder arriving under a playing queue needs no repair: `tracks` is
-replaced and the position falls out. `play(track)` becomes sugar for a
-queue of one with no source.
+else. The current track is the player's loaded one, found in `tracks` by
+id rather than held as an index, so a reorder arriving under a playing
+queue needs no repair: `tracks` is replaced and the position falls out.
+`play(track)` becomes sugar for a queue of one with no source.
 
 A queue whose `source` is a label re-reads `tracks` whenever that label's
 clip list changes — after a local drag, after a reorder response, and
 after an add or remove of the label. A clip that leaves the list while it
-is the current track keeps playing; it is simply no longer found, and the
-queue ends when it does.
+is the current track keeps playing. When `tracks` is replaced without
+it, `resumeAt` records the first of its old successors still in the
+list, and the end of the track continues from there — which is what
+"the queue continues from where that clip now sits" needs, and what a
+bare id lookup could not give.
+
+`setQueueTracks` takes the source as well as the tracks, and does
+nothing unless the queue is that label's. Every caller would otherwise
+have to read the queue's source first, and on the web that made the
+callback change identity with every track, which a page syncing the
+queue from an effect cannot live with.
 
 **Web** (`web/src/player.tsx`):
 
 - `PlayerContext` gains `queue`, `next`, `previous`,
   `playQueue(tracks, clipId, source)`, `jumpTo(clipId)` and
-  `setQueueTracks(tracks)`, the last of which is how a reorder reaches a
-  playing queue. `repeat` and `setRepeat` keep their present shape and
-  meaning.
+  `setQueueTracks(source, tracks)`, the last of which is how a reorder
+  reaches a playing queue. `repeat` and `setRepeat` keep their present
+  shape and meaning. `stop` becomes `forget(clipId)`, which stops the
+  clip if it is playing and otherwise takes it out of the queue, and
+  `syncLabels(track, labelNames)` lets the clip page add a clip to, or
+  drop it from, a queue playing from a label it just gained or lost.
+- A track that fails to load (wavesurfer's `error`) skips to the next;
+  a whole pass of failures stops playback and shows the error in a
+  dismissable notice where the bar was, since the bar is then gone.
 - The `finish` handler, which today only sets `isPlaying` to false, gains
   the advance: find the current clip in `tracks`, take the row after it;
   at the end, wrap to the first when repeat is on, otherwise stop.
@@ -404,10 +421,15 @@ queue ends when it does.
   same try/catch.
 - `PlayerPane` is rebuilt as described in "The web player view".
 - `web/src/pages/index.tsx` — drag handles, the playlist heading, and
-  `playQueue` on a row's play button. A drop calls `setQueueTracks` when
-  the playing queue's source is this label, so the player and the list
-  never disagree. The drag is hand-rolled with HTML5 drag-and-drop on the
-  handle; no library.
+  `playQueue` on a row's play button. A drop calls `setQueueTracks`, and
+  so does arriving at the page with fresh props, so the player and the
+  list never disagree. The drag is hand-rolled with HTML5 drag-and-drop
+  on the handle; the row moves during the drag and the move is committed
+  on `dragend`. The keyboard path is Space or Enter to pick the row up,
+  arrows to move it, Space or Enter (or leaving the handle) to put it
+  down, Escape to cancel.
+- `web/src/pages/clip.tsx` — `forget` on delete, `syncLabels` on a label
+  added or removed.
 - `web/src/api.ts` — `reorderPlaylist(labelId, clipId, afterClipId)`.
 - `web/src/types.ts` — `PlaylistInfo`, `playlist` on `IndexProps`.
 - `web/src/styles/app.css` — `.playlist-head`, `.clip-card .drag-handle`,
@@ -416,10 +438,13 @@ queue ends when it does.
 **Phone** (`mobile/lib/src/player/`):
 
 - `PlayerController` gains the queue, with
-  `playQueue(List<Clip>, int clipId, {String? source})` and
-  `setQueueTracks(List<Clip>)` beside the existing `play`. `play(clip,
-  url)` keeps its signature and makes a queue of one, so every existing
-  call site is unchanged. Repeat keeps its bool.
+  `playQueue(List<Clip>, int clipId, {String? source, required urlFor,
+  headers})`, `setQueueTracks(String source, List<Clip>)`, `next`,
+  `previous` and `jumpTo` beside the existing `play`. The queue resolves
+  each clip's URL only when it is reached, so `playQueue` takes a
+  resolver rather than a list of URLs. `play(clip, url)` keeps its
+  signature and makes a queue of one, so every existing call site is
+  unchanged. Repeat keeps its bool.
 - `_onCompleted` grows the advance rule. It currently handles repeat by
   seeking to zero and playing again, with a comment noting that the
   platform's own looping should have meant it never fires — that stays
@@ -433,12 +458,17 @@ queue ends when it does.
 - `Settings` is untouched.
 - `mobile/lib/src/ui/clips_page.dart` — `SliverReorderableList` when
   there is exactly one filter, the playlist heading, `playQueue` from a
-  row, and `setQueueTracks` after a reorder that lands under a queue
-  playing from this label.
+  row, and `setQueueTracks` after a reorder and after every reload. The
+  filter is a name and the playlist route wants an id, so a one-filter
+  load reads `/api/v1/clips` first for the label's id and then the
+  playlist; a 404 from a server without the route falls back to the
+  plain list. A label added or removed on a clip's page reaches the queue
+  through the reload the list already does when that page reports a
+  change.
 - `mobile/lib/src/ui/player_sheet.dart` — previous and next in
   `_Controls`, and the "Playing from …" line that expands into the queue.
-- `mobile/lib/src/ui/player_bar.dart` — unchanged apart from the queue's
-  effect on what next does.
+- `mobile/lib/src/ui/player_bar.dart` — unchanged apart from the repeat
+  glyph.
 - `mobile/lib/src/api/client.dart` — `playlist(labelId)` and
   `reorderPlaylist(labelId, clipId, afterClipId)`.
 - `mobile/test/` — the controller tests are where the interesting rules

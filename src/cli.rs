@@ -22,6 +22,10 @@ pub enum Command {
     },
     /// Reset a user's password to a new random value, printed to stdout.
     ResetPassword { username: String },
+    /// Set a user's password to a given value. For local development: the
+    /// password is visible in shell history and in `ps`, so prefer
+    /// reset-password anywhere that matters.
+    SetPasswordExplicit { username: String, password: String },
     /// List all users.
     ListUsers,
     /// Backfill recording_date for clips that don't have one yet.
@@ -62,17 +66,14 @@ pub async fn run(cli: Cli) -> Result<()> {
         }
         Command::ResetPassword { username } => {
             let password = auth::random_password();
-            let hash = auth::hash_password(&password)?;
-            let result = sqlx::query("UPDATE users SET password_hash = ? WHERE username = ?")
-                .bind(&hash)
-                .bind(&username)
-                .execute(&pool)
-                .await?;
-            if result.rows_affected() == 0 {
-                anyhow::bail!("no such user: {username}");
-            }
+            set_password(&pool, &username, &password).await?;
             println!("Password reset for {username}");
             println!("New password: {password}");
+            Ok(())
+        }
+        Command::SetPasswordExplicit { username, password } => {
+            set_password(&pool, &username, &password).await?;
+            println!("Password set for {username}");
             Ok(())
         }
         Command::ListUsers => list_users(&pool).await,
@@ -82,6 +83,28 @@ pub async fn run(cli: Cli) -> Result<()> {
 }
 
 /// List every user, one per line, with their admin flag and creation time.
+/// Store a new password for a user, and revoke their app tokens.
+///
+/// The tokens go because a password change is how access is cut off, and
+/// a signed-in phone that kept working would defeat that. This matches
+/// what the web and the API do.
+async fn set_password(pool: &sqlx::SqlitePool, username: &str, password: &str) -> Result<()> {
+    let row: Option<(i64,)> = sqlx::query_as("SELECT id FROM users WHERE username = ?")
+        .bind(username)
+        .fetch_optional(pool)
+        .await?;
+    let (user_id,) = row.with_context(|| format!("no such user: {username}"))?;
+
+    let hash = auth::hash_password(password)?;
+    sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+        .bind(&hash)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    crate::tokens::revoke_all(pool, user_id).await?;
+    Ok(())
+}
+
 async fn list_users(pool: &sqlx::SqlitePool) -> Result<()> {
     let users: Vec<(i64, String, i64, String)> = sqlx::query_as(
         "SELECT id, username, is_admin, created_at FROM users ORDER BY username COLLATE NOCASE",

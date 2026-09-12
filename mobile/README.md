@@ -218,10 +218,13 @@ shipping Android before the Apple side exists should be a green release
 rather than half a red one, but a half-built pipeline that quietly ships
 one platform is worse than one that fails.
 
-Run `make-ios-signing` again when the profile expires, which is once a
-year. It replaces the profile and leaves the certificate alone, which is
-the point: an account is allowed very few distribution certificates, and
-asking for another while the one you have still works is how you run out.
+Run `make-ios-signing` again in a year. The certificate and the profile
+both expire a year after they are issued, so a yearly run renews both:
+the profile every time, the certificate only once the one you have is
+nearly out. That last part matters because an account is allowed very few
+live distribution certificates, and asking for another while the one you
+have still works is how you run out. Superseded material is moved aside
+rather than deleted.
 
 ### What ends up in the repository's secrets
 

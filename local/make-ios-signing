@@ -11,10 +11,11 @@
 # Store provisioning profile naming that certificate, and sets the seven
 # GitHub secrets the release workflow reads.
 #
-# Later runs reuse the certificate and replace only the profile, which is
-# what a profile expiring once a year asks for. An account is allowed
-# very few distribution certificates, and asking for another when the one
-# you have still works is how you run out.
+# Later runs replace the profile, and reuse the certificate for as long
+# as it is good for. An account is allowed very few live distribution
+# certificates, and asking for another while the one you have still works
+# is how you run out. Both expire a year after they are issued, so in
+# practice a yearly run renews both.
 #
 # Everything it makes is kept in ~/.apple-signing, outside the repository.
 # Back that directory up: the private key in it exists nowhere else, and
@@ -83,6 +84,11 @@ bundle="$output_dir/iggybilly-distribution.p12"
 bundle_password_file="$output_dir/iggybilly-distribution.p12.password"
 certificate_id_file="$output_dir/iggybilly-distribution.certificate-id"
 profile="$output_dir/iggybilly-appstore.mobileprovision"
+
+# Renew rather than reuse once the certificate has this little left. A
+# profile cannot outlive the certificate it names, so a certificate about
+# to go takes the profile with it.
+renew_within="$((30 * 24 * 60 * 60))"
 
 work="$(mktemp -d)"
 response_file="$work/response.json"
@@ -176,7 +182,30 @@ chmod 700 "$output_dir"
 
 ## The certificate
 
+reuse=false
 if [ -e "$bundle" ]; then
+    if openssl x509 -in "$certificate" -noout -checkend "$renew_within" > /dev/null 2>&1; then
+        reuse=true
+    else
+        echo "make-ios-signing: the certificate in $output_dir expires $(
+            openssl x509 -in "$certificate" -noout -enddate | sed 's/notAfter=//'
+        ), so asking for a new one" >&2
+
+        # Moved aside rather than overwritten. A certificate is not worth
+        # much once it has expired, but the private key under it is the
+        # only thing that can prove which builds were signed with it.
+        stamp="$(date +%Y%m%d%H%M%S)"
+        for old in "$private_key" "$certificate" "$bundle" \
+            "$bundle_password_file" "$certificate_id_file"; do
+            if [ -e "$old" ]; then
+                mv "$old" "$old.$stamp"
+            fi
+        done
+        echo "make-ios-signing: the old material is now *.$stamp" >&2
+    fi
+fi
+
+if [ "$reuse" = true ]; then
     echo "make-ios-signing: reusing the certificate in $output_dir" >&2
     [ -f "$certificate_id_file" ] ||
         die "$bundle is there but $certificate_id_file is not, so there is
@@ -305,6 +334,7 @@ Two things left, both web-only and both once:
 
      gh variable set IOS_RELEASE --body enabled
 
-The profile expires in a year. Run this again then: it replaces the
-profile and leaves the certificate alone.
+Both the certificate and the profile expire a year from issue. Run this
+again then: it replaces the profile every time, and the certificate only
+once that one is nearly out.
 MESSAGE

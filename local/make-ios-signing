@@ -85,6 +85,7 @@ certificate_id_file="$output_dir/iggybilly-distribution.certificate-id"
 profile="$output_dir/iggybilly-appstore.mobileprovision"
 
 work="$(mktemp -d)"
+response_file="$work/response.json"
 trap 'rm -rf "$work"' EXIT
 
 ## Talking to App Store Connect
@@ -127,34 +128,45 @@ mint_token() {
 # Every call goes through here, so that a refusal is reported as the
 # sentence Apple wrote rather than as a later jq finding no field in a
 # body nobody looked at.
+#
+# The answer lands in a file rather than on stdout, so that this runs in
+# the main shell. Called inside a command substitution instead, a failure
+# here would exit only that subshell, and the caller would carry on with
+# an empty string -- which is how a lookup that never happened turned
+# into an attempt to register a bundle id that already existed.
 api() {
-    local method="$1" path="$2" body="${3:-}" response
+    local method="$1" path="$2" body="${3:-}"
+    local -a arguments=(
+        --silent --show-error
+        # Or curl reads the brackets in filter[identifier] as a range of
+        # its own and refuses to make the request at all.
+        --globoff
+        --request "$method"
+        --header "Authorization: Bearer $token"
+        "https://api.appstoreconnect.apple.com$path"
+    )
     if [ -n "$body" ]; then
-        response="$(curl -sS -X "$method" "https://api.appstoreconnect.apple.com$path" \
-            -H "Authorization: Bearer $token" \
-            -H "Content-Type: application/json" \
-            -d "$body")"
-    else
-        response="$(curl -sS -X "$method" "https://api.appstoreconnect.apple.com$path" \
-            -H "Authorization: Bearer $token")"
+        arguments+=(--header "Content-Type: application/json" --data "$body")
     fi
 
-    # A successful DELETE says nothing at all.
-    [ -n "$response" ] || return 0
+    : > "$response_file"
+    curl "${arguments[@]}" > "$response_file" ||
+        die "could not reach App Store Connect for $method $path."
 
-    printf '%s' "$response" | jq -e . > /dev/null 2>&1 || {
+    # A successful DELETE says nothing at all.
+    [ -s "$response_file" ] || return 0
+
+    jq -e . "$response_file" > /dev/null 2>&1 || {
         echo "make-ios-signing: $method $path did not answer with JSON:" >&2
-        printf '%s\n' "$response" | head -c 2000 >&2
+        head -c 2000 "$response_file" >&2
         exit 1
     }
 
-    if printf '%s' "$response" | jq -e 'has("errors")' > /dev/null; then
+    if jq -e 'has("errors")' "$response_file" > /dev/null; then
         echo "make-ios-signing: App Store Connect refused $method $path:" >&2
-        printf '%s' "$response" | jq -r '.errors[] | "  \(.title): \(.detail)"' >&2
+        jq -r '.errors[] | "  \(.title): \(.detail)"' "$response_file" >&2
         exit 1
     fi
-
-    printf '%s' "$response"
 }
 
 token="$(mint_token)"
@@ -175,8 +187,9 @@ whole of $output_dir aside and run this again to start over."
 else
     echo "make-ios-signing: asking for an Apple Distribution certificate" >&2
 
-    existing="$(api GET '/v1/certificates?filter[certificateType]=DISTRIBUTION&limit=200' |
-        jq -r '.data[] | "  \(.attributes.name), expires \(.attributes.expirationDate)"')"
+    api GET '/v1/certificates?filter[certificateType]=DISTRIBUTION&limit=200'
+    existing="$(jq -r '.data[] | "  \(.attributes.name), expires \(.attributes.expirationDate)"' \
+        "$response_file")"
     if [ -n "$existing" ]; then
         echo "make-ios-signing: this account already has distribution certificates:" >&2
         printf '%s\n' "$existing" >&2
@@ -193,8 +206,8 @@ else
 
     api POST /v1/certificates "$(jq -nc \
         --rawfile csr "$work/request.csr" \
-        '{data: {type: "certificates", attributes: {csrContent: $csr, certificateType: "DISTRIBUTION"}}}')" \
-        > "$work/certificate.json"
+        '{data: {type: "certificates", attributes: {csrContent: $csr, certificateType: "DISTRIBUTION"}}}')"
+    cp "$response_file" "$work/certificate.json"
 
     certificate_id="$(jq -r '.data.id' "$work/certificate.json")"
 
@@ -221,24 +234,27 @@ fi
 
 echo "make-ios-signing: making sure $bundle_id is registered" >&2
 
-bundle_id_id="$(api GET "/v1/bundleIds?filter[identifier]=$bundle_id&filter[platform]=IOS" |
-    jq -r '.data[0].id // empty')"
+# No platform filter: one registered as UNIVERSAL is still the one we
+# want, and filtering it out would have us try to register it again.
+api GET "/v1/bundleIds?filter[identifier]=$bundle_id"
+bundle_id_id="$(jq -r '.data[0].id // empty' "$response_file")"
 
 if [ -z "$bundle_id_id" ]; then
-    bundle_id_id="$(api POST /v1/bundleIds "$(jq -nc --arg identifier "$bundle_id" \
-        '{data: {type: "bundleIds", attributes: {identifier: $identifier, name: "iggybilly", platform: "IOS"}}}')" |
-        jq -r '.data.id')"
+    api POST /v1/bundleIds "$(jq -nc --arg identifier "$bundle_id" \
+        '{data: {type: "bundleIds", attributes: {identifier: $identifier, name: "iggybilly", platform: "IOS"}}}')"
+    bundle_id_id="$(jq -r '.data.id' "$response_file")"
     echo "make-ios-signing: registered it" >&2
 fi
 
 # A profile is disposable in a way a certificate is not: another can be
 # made from the same certificate at any time. So a stale one of our own
 # name is deleted rather than worked around.
-old_profile="$(api GET '/v1/profiles?limit=200' |
-    jq -r --arg name "$profile_name" '.data[] | select(.attributes.name == $name) | .id')"
+api GET '/v1/profiles?limit=200'
+old_profile="$(jq -r --arg name "$profile_name" \
+    '.data[] | select(.attributes.name == $name) | .id' "$response_file")"
 if [ -n "$old_profile" ]; then
     echo "make-ios-signing: replacing the existing '$profile_name' profile" >&2
-    api DELETE "/v1/profiles/$old_profile" > /dev/null
+    api DELETE "/v1/profiles/$old_profile"
 fi
 
 echo "make-ios-signing: making the App Store profile" >&2
@@ -254,7 +270,8 @@ api POST /v1/profiles "$(jq -nc \
             bundleId: {data: {type: "bundleIds", id: $bundle}},
             certificates: {data: [{type: "certificates", id: $certificate}]}
         }
-    }}')" | jq -r '.data.attributes.profileContent' | base64 -d > "$profile"
+    }}')"
+jq -r '.data.attributes.profileContent' "$response_file" | base64 -d > "$profile"
 
 ## The secrets
 

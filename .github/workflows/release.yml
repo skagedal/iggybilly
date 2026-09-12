@@ -1,9 +1,14 @@
 name: Release the app
 
-# Pushing a version tag ships both phone apps from the same commit:
-# Android as an APK on the tag's GitHub release, iOS to TestFlight.
+# Pushing a mobile version tag ships both phone apps from the same
+# commit: Android as an APK on the tag's GitHub release, iOS to
+# TestFlight.
 #
-#   git tag v0.2.0 && git push origin v0.2.0
+#   git tag mobile-0.2.0 && git push origin mobile-0.2.0
+#
+# The prefix is what makes the tag mean something. The server and the
+# frontend ship from main on every push and have no versions of their own,
+# so a bare v0.2.0 here would look like it spoke for the whole repository.
 #
 # The tag is the only place the version is written. pubspec.yaml's
 # version is what a local build gets and nothing more; the build name and
@@ -11,7 +16,7 @@ name: Release the app
 # commit of its own.
 on:
   push:
-    tags: ["v*"]
+    tags: ["mobile-*"]
 
 jobs:
   version:
@@ -24,13 +29,13 @@ jobs:
       - name: Derive the version and build number from the tag
         id: derive
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="${GITHUB_REF_NAME#mobile-}"
 
           # App Store Connect takes one to three integers and nothing
           # else, so v1.2.0-rc1 would fail -- but only after a build long
           # enough to have forgotten about. Fail here instead.
           if ! printf '%s' "$version" | grep -Eq '^[0-9]+(\.[0-9]+){0,2}$'; then
-            echo "::error::the tag $GITHUB_REF_NAME does not name a version. Expected something like v1.2.3."
+            echo "::error::the tag $GITHUB_REF_NAME does not name a version. Expected something like mobile-1.2.3."
             exit 1
           fi
 

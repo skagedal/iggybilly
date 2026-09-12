@@ -25,6 +25,12 @@ long after the code exists, and `git log --follow` keeps the whole of it.
 A spec in `implemented/` is not a maintained description of the system —
 the READMEs are that. It is what was decided, when.
 
+A few go straight into `implemented/`, written from the code afterwards.
+That earns its keep when a later spec argues from an earlier decision:
+`label-wiki.md` is there because the comments draft takes its storage
+decision from it, and an argument that points at a written reason is
+stronger than one that points at a file.
+
 ## How to write one
 
 Name the file after the feature, not the issue: `recording-in-app.md`,

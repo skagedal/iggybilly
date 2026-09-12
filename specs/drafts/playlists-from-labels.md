@@ -17,8 +17,9 @@ below:
    This is settled, not open.
 2. **Order is sparse integers and a move writes one row.** Two people
    dragging different clips at the same time do not clobber each other.
-3. **Repeat becomes three-valued**, and keeps the media element's own
-   gapless looping in every case where gaplessness is achievable.
+3. **Repeat stays a two-valued toggle** and comes to mean the queue,
+   keeping the media element's own gapless looping wherever gaplessness
+   is achievable.
 
 ## Functionality
 
@@ -45,8 +46,6 @@ With one label active, the list changes in four ways.
   reordered by dragging. On the phone this is a long-press drag on the
   handle; on the web it is a pointer drag, with the handle also
   focusable and reorderable by keyboard (arrow up/down while held).
-- Each row shows its **position** in the list — a plain number, so
-  "third" is something you can say to someone else.
 - A heading above the list names the playlist: the label, the number of
   clips, and their total length. The label's wiki page still sits above
   that, as it does now.
@@ -57,8 +56,8 @@ and continues into the next when it ends.
 Reordering is optimistic: the row moves as you drop it and the request
 goes out behind it. If the request fails — no network, or the server
 renumbered underneath you — the list springs back to the server's order
-and a message says why. Reordering does not touch what is playing (see
-"The queue is a snapshot").
+and a message says why. A queue playing from this label is reordered
+along with it (see "The queue follows the playlist").
 
 Anyone signed in can reorder. There is no per-user order: the issue asks
 for one order that affects everyone, and a band that shares a set list
@@ -97,59 +96,82 @@ one, which is what every other player does and what the hand expects.
 Next on the last track goes to the first when repeat is on and stops
 otherwise.
 
-### The queue is a snapshot
+The player view's track list is the playlist, live: a drag landing while
+the list is open moves the row.
 
-The queue is taken when you press play and does not track later changes.
-Someone reordering the playlist while you are listening does not reshuffle
-what you are hearing; adding a clip to the label does not extend your
-queue. You get the new order the next time you press play.
+### The queue follows the playlist
 
-This is a choice for predictability. A queue that silently rewrites
-itself under someone else's drag is worse than one that is a moment ago's
-answer — and the cost is one press to get the current one.
+A queue playing from a label is that label's playlist, not a copy of it
+taken at press time. Drag a clip while the playlist is playing and what
+comes next changes to match. Add a clip to the label and the queue grows;
+take the label off a clip and the clip leaves the queue.
 
-Two consequences, both spelled out because they are the cases people hit:
+The playlist is a thing the band agrees on, and the whole point of a
+shared order is that changing it changes what happens. A queue that
+ignored the drag you just watched land would be the surprising one.
 
-- **A clip deleted while queued.** If it is the one playing, playback
-  stops, as it does today. If it is further down, reaching it fails to
-  load and the player skips to the next. If every remaining track in the
-  queue fails in one pass, playback stops with the error rather than
+What never changes underneath you is the **track that is playing**. A
+reorder moves it to its new place in the queue and playback carries on
+untouched; only what follows it is different. The same holds for the clip
+playing when its label is removed: it finishes, and the queue continues
+from where that clip now sits. Nothing reloads, reseeks or restarts.
+
+Three consequences, spelled out because they are the cases people hit:
+
+- **A clip is dragged while it is playing.** It keeps playing. Its
+  position in the queue moves, so "next" now means whatever follows it
+  where it landed.
+- **A clip is deleted.** If it is the one playing, playback stops, as it
+  does today. Otherwise it simply leaves the queue. A clip that vanishes
+  between being queued and being reached fails to load and is skipped,
+  and a whole pass of failures stops playback with the error rather than
   spinning through a dead list.
-- **A label removed from a queued clip.** Nothing happens. It plays.
+- **A label is removed from the clip that is playing.** It finishes. The
+  queue continues without it.
+
+The queue is held as the label and a current clip id rather than as an
+array with an index, which is what makes all of this fall out: the list
+is re-read, the playing clip is found in it by id, and next is the row
+after it. An index into a list someone else is editing is the thing that
+would need repairing.
 
 ### Repeat
 
-Repeat becomes three-valued, and the button cycles **off → all → one →
-off**:
+Repeat stays the toggle it is today, off or on. What changes is what it
+repeats: **the queue**. With repeat on, the end of the last track wraps
+to the first instead of stopping.
 
-| Mode | What it does |
-| --- | --- |
-| off | The queue plays to its end and stops |
-| all | The queue plays to its end and starts again from the top |
-| one | The current track repeats, forever, and the queue never advances |
+There is deliberately no third "repeat this one track" mode. A queue of
+one track is the common case — every clip page, every unfiltered list —
+and there repeating the queue *is* looping the clip, so the way to put a
+single take on a loop is to play it from its own page, which is where you
+already are when you want that. A mode that exists to reproduce what
+another screen already does is a button people have to think about.
 
-With a queue of one track, "all" and "one" both mean "loop this clip",
-which is exactly what the single toggle means today.
-
-The icons are distinct on both clients — the phone already has
-`Icons.repeat` and `Icons.repeat_one`, and the web uses `⟳` and `⟳¹` —
-and the player bar shows the active glyph, as it shows `⟳` today.
+The glyph stays `⟳` on the web and `Icons.repeat` on the phone, lit when
+on, exactly as now.
 
 **Gaplessness is preserved.** The README is explicit that repeat today is
 the media element's own looping because a one-bar riff repeated with a
 hole in it is a different sound, and that must not regress. The rule is:
 
-> the media element loops itself when the mode is "one", **or** when the
-> mode is "all" and the queue holds exactly one track.
+> the media element loops itself when repeat is on **and** the queue
+> holds exactly one track.
 
 Otherwise looping is off and the player advances on the end-of-track
-event. So every case where gapless looping is achievable stays gapless —
-the single-clip case is bit-for-bit what it is today — and the only case
-that gets a seam is the wrap from the last track of a real playlist back
-to the first, where a seam is a track change anyway.
+event, wrapping to the first track when repeat is on. So every case where
+gapless looping is achievable stays gapless — the single-clip case is
+bit-for-bit what it is today — and the only case that gets a seam is the
+wrap from the last track of a real playlist back to the first, where a
+seam is a track change anyway.
 
-Repeat is remembered between visits, as it is now. An existing stored
-"on" becomes **one**, which is what it meant.
+Note that this makes the loop flag depend on the queue's length, so it
+has to be recomputed when the queue changes and not only when the toggle
+moves.
+
+Repeat is remembered between visits exactly as it is now, in the same
+`iggybilly.repeat` key with the same `"1"`/`"0"` values. Nothing about
+the stored setting changes and there is no migration.
 
 ### The web player view
 
@@ -348,36 +370,44 @@ route otherwise.
 The shared model is the same on each side, and it is worth keeping the
 names the same:
 
-    Queue { tracks: Track[], index: number, source: string | null }
+    Queue { source: string | null, tracks: Track[], currentClipId: number }
 
 `source` is the label name, or null for a queue that came from somewhere
-else. `play(track)` becomes sugar for a queue of one.
+else. The current track is found by id, not held as an index, so a
+reorder arriving under a playing queue needs no repair: `tracks` is
+replaced and the position falls out. `play(track)` becomes sugar for a
+queue of one with no source.
 
-    RepeatMode = "off" | "all" | "one"
+A queue whose `source` is a label re-reads `tracks` whenever that label's
+clip list changes — after a local drag, after a reorder response, and
+after an add or remove of the label. A clip that leaves the list while it
+is the current track keeps playing; it is simply no longer found, and the
+queue ends when it does.
 
 **Web** (`web/src/player.tsx`):
 
-- `PlayerContext` gains `queue`, `repeatMode`, `setRepeatMode`,
-  `cycleRepeat`, `next`, `previous`, `playQueue(tracks, index, source)`,
-  and `jumpTo(index)`. `repeat: boolean` and `setRepeat` go away; the two
-  call sites are in this file.
+- `PlayerContext` gains `queue`, `next`, `previous`,
+  `playQueue(tracks, clipId, source)`, `jumpTo(clipId)` and
+  `setQueueTracks(tracks)`, the last of which is how a reorder reaches a
+  playing queue. `repeat` and `setRepeat` keep their present shape and
+  meaning.
 - The `finish` handler, which today only sets `isPlaying` to false, gains
-  the advance: move to `index + 1`; at the end, wrap to 0 when the mode
-  is "all", otherwise stop. Advancing sets the track, which the existing
-  effect turns into a new WaveSurfer instance — that is already the one
-  path that loads a track, and it stays the only one.
+  the advance: find the current clip in `tracks`, take the row after it;
+  at the end, wrap to the first when repeat is on, otherwise stop.
+  Advancing sets the track, which the existing effect turns into a new
+  WaveSurfer instance — that is already the one path that loads a track,
+  and it stays the only one.
 - The looping effect changes from `media.loop = repeat` to the rule in
-  "Repeat" above, and keeps `track` in its dependencies for the same
-  reason it does now.
-- The stored setting moves from `iggybilly.repeat` (`"1"`/`"0"`) to
-  `iggybilly.repeatMode` (`"off"`/`"all"`/`"one"`). On read, an absent
-  new key with an old key of `"1"` yields `"one"`, and the old key is
-  removed. Both reads stay inside the existing try/catch: storage being
-  unreadable must remain survivable.
+  "Repeat" above, so it gains `queue.tracks.length` alongside `repeat`
+  and `track` in its dependencies.
+- The stored setting is untouched: `iggybilly.repeat`, `"1"`/`"0"`, the
+  same try/catch.
 - `PlayerPane` is rebuilt as described in "The web player view".
-- `web/src/pages/index.tsx` — drag handles, positions, the playlist
-  heading, and `playQueue` on a row's play button. The drag is
-  hand-rolled with HTML5 drag-and-drop on the handle; no library.
+- `web/src/pages/index.tsx` — drag handles, the playlist heading, and
+  `playQueue` on a row's play button. A drop calls `setQueueTracks` when
+  the playing queue's source is this label, so the player and the list
+  never disagree. The drag is hand-rolled with HTML5 drag-and-drop on the
+  handle; no library.
 - `web/src/api.ts` — `reorderPlaylist(labelId, clipId, afterClipId)`.
 - `web/src/types.ts` — `PlaylistInfo`, `playlist` on `IndexProps`.
 - `web/src/styles/app.css` — `.playlist-head`, `.clip-card .drag-handle`,
@@ -385,36 +415,38 @@ else. `play(track)` becomes sugar for a queue of one.
 
 **Phone** (`mobile/lib/src/player/`):
 
-- `PlayerController` gains the queue and the three-valued repeat, with
-  `playQueue(List<Clip>, int index, {String? source})` beside the
-  existing `play`. `play(clip, url)` keeps its signature and makes a
-  queue of one, so every existing call site is unchanged.
-- `_onCompleted` grows the same advance rule. It currently handles repeat
-  by seeking to zero and playing again, with a comment noting that the
+- `PlayerController` gains the queue, with
+  `playQueue(List<Clip>, int clipId, {String? source})` and
+  `setQueueTracks(List<Clip>)` beside the existing `play`. `play(clip,
+  url)` keeps its signature and makes a queue of one, so every existing
+  call site is unchanged. Repeat keeps its bool.
+- `_onCompleted` grows the advance rule. It currently handles repeat by
+  seeking to zero and playing again, with a comment noting that the
   platform's own looping should have meant it never fires — that stays
-  for `RepeatMode.one`, and the advance is the new branch.
+  for the queue-of-one case, and the advance is the new branch.
 - `AudioEngine.setRepeat(bool)` becomes `setLoopCurrent(bool)`, called
-  with the "gaplessness" rule's answer rather than with the user's mode.
-  `JustAudioEngine` still maps it to `LoopMode.one` / `LoopMode.off`;
-  `LoopMode.all` is never used, because just_audio's queue is not the one
-  we are keeping.
-- `Settings` gains `readRepeatMode`/`writeRepeatMode` over a string, with
-  the same migration from the old bool as the web does from the old
-  string. `InMemorySettings` follows.
+  with the "gaplessness" rule's answer rather than with the user's
+  toggle, and recomputed when the queue changes as well as when the
+  toggle moves. `JustAudioEngine` still maps it to `LoopMode.one` /
+  `LoopMode.off`; `LoopMode.all` is never used, because just_audio's
+  queue is not the one we are keeping.
+- `Settings` is untouched.
 - `mobile/lib/src/ui/clips_page.dart` — `SliverReorderableList` when
-  there is exactly one filter, the playlist heading, and `playQueue` from
-  a row.
+  there is exactly one filter, the playlist heading, `playQueue` from a
+  row, and `setQueueTracks` after a reorder that lands under a queue
+  playing from this label.
 - `mobile/lib/src/ui/player_sheet.dart` — previous and next in
-  `_Controls`, the three-way repeat icon, and the "Playing from …" line
-  that expands into the queue.
-- `mobile/lib/src/ui/player_bar.dart` — the repeat glyph reflects the
-  mode.
+  `_Controls`, and the "Playing from …" line that expands into the queue.
+- `mobile/lib/src/ui/player_bar.dart` — unchanged apart from the queue's
+  effect on what next does.
 - `mobile/lib/src/api/client.dart` — `playlist(labelId)` and
   `reorderPlaylist(labelId, clipId, afterClipId)`.
 - `mobile/test/` — the controller tests are where the interesting rules
-  live: advancing at the end of a track, wrapping under "all", not
-  advancing under "one", the loop flag for a queue of one, skipping a
-  track that fails to load, and stopping after a whole pass of failures.
+  live: advancing at the end of a track, wrapping when repeat is on, the
+  loop flag for a queue of one and its recomputation when the queue grows
+  past one, a reorder landing under a playing queue without disturbing
+  the current track, the current clip leaving the list, skipping a track
+  that fails to load, and stopping after a whole pass of failures.
 
 ### Caching and offline
 
@@ -428,12 +460,20 @@ because the cache's eviction policy is "least recently played" and a
 prefetch is a play that never happened. Getting that right is its own
 change.
 
+Marking a **whole playlist** as "keep downloaded" is the change people
+will actually ask for: a set list is exactly the thing you want on your
+phone before a rehearsal in a basement. It is left out here on purpose.
+Done properly it means keeping the label's membership and the clips'
+metadata offline too, not just the audio, and at that point it is the
+first step of making the app local-first rather than a playlist feature.
+That is issue #24, and it should be designed as a whole.
+
 ### Documentation
 
-The root `README.md` "What it does" list gains playlists and the
-three-way repeat, and the paragraph about repeat being the media
-element's own looping is extended with the rule above rather than
-replaced — it is still true, and now it is true conditionally.
+The root `README.md` "What it does" list gains playlists, and the
+paragraph about repeat being the media element's own looping is extended
+with the rule above rather than replaced — it is still true, and now it
+is true conditionally.
 `mobile/README.md`'s "The player" section gains the queue and the same
 rule.
 
@@ -456,3 +496,9 @@ rule.
   Discord link.** `/?label=x` is the one entry point. A "play all" button
   in the playlist heading would be the obvious addition and is left out
   until someone misses it.
+- **A live queue makes the playing row a moving target.** Reordering the
+  playlist you are listening to is meant to work, but two people dragging
+  in the same minute will see the queue rearrange under them. If that
+  turns out to be unpleasant rather than useful, the smaller fix is to
+  keep the queue live for your own drags and re-read on the next track
+  boundary for other people's, not to go back to a frozen queue.

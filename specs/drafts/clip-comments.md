@@ -12,9 +12,11 @@ Every comment is also posted to Discord, because that is where the band
 already talks and a comment nobody sees is not worth writing.
 
 Comments resemble wiki pages in shape — user-authored text hanging off
-something else, with an author and a time — and differ in two ways that
-matter. They are plain text, not Markdown, and they are not versioned.
-Both are deliberate; see below.
+something else, with an author and a time — and borrow their storage
+decision wholesale: Markdown source in the column, rendered on read by
+each surface. See [the wiki spec](../implemented/label-wiki.md), which
+sets out why. The one place they differ is versioning: a wiki page keeps
+every revision and a comment does not.
 
 ## Functionality
 
@@ -27,8 +29,13 @@ see there is something to read without opening it.
 
 ### The anchor
 
-A thread is anchored to a number of seconds into the clip. The anchor is
-set when the thread is created and never moves.
+A thread is anchored to a point in the clip measured in seconds, stored
+as a fractional number rather than a whole one. Whole seconds would be
+too coarse for what this is for: the clips are often a bar or two long,
+and "the entry is late" is a remark about a moment, not about a second.
+Anchors keep millisecond resolution, which is finer than anyone can click
+and finer than the nudge buttons move. The anchor is set when the thread
+is created and never moves.
 
 Clicking the waveform still seeks — that is what a waveform is for, and
 taking it over for commenting would be a bad trade. Instead the big
@@ -49,11 +56,15 @@ Clicking a pin scrolls its thread into view and highlights it for a
 moment. Pins that fall on nearly the same pixel simply overlap; there is
 no clustering, and the thread list below is the real interface.
 
-A clip whose duration the server could not work out has no strip — there
-is nothing to place a pin along. Its threads still work, anchored to the
-playhead the media element reports, and are shown as a plain list with
-their timestamps. The **Comment at …** button is the only way to start
-one.
+A few clips have no stored duration — `duration_seconds` is nullable and
+is null for anything symphonia could not decode. They do display, and
+already handle this: the player falls back to the duration wavesurfer
+reports once it has fetched and decoded the file, which is what
+`decodedDuration` in `web/src/player.tsx` is for. The strip uses that
+same number, so on those clips it appears when the file has loaded rather
+than on first paint. Until then the thread list below is fully usable and
+the **Comment at …** button works, because the playhead is known even
+when the total is not.
 
 ### The thread list
 
@@ -69,33 +80,76 @@ A thread renders as:
   player if it is not already there, seeks to the anchor and plays. That
   is the payoff of the whole feature and it is one press from anywhere in
   the list.
-- The opening comment: author, relative time on the phone and `YYYY-MM-DD
-  HH:MM` on the web (each client's existing convention), and the body.
-- Its replies, indented once. Replies do not nest further: a reply to a
-  reply is a reply to the thread, and two levels is all a discussion
-  about four seconds of audio needs.
+- Its comments, oldest first, each one the same: author, relative time on
+  the phone and `YYYY-MM-DD HH:MM` on the web (each client's existing
+  convention), and the body. The opening comment is laid out exactly like
+  the rest — same alignment, no indent, nothing marking it as the first.
+  A thread is a list of remarks about one moment, and indenting replies
+  under the opener would draw a hierarchy that is not there. Replies do
+  not nest either: a reply to a reply is a reply to the thread.
 - A **Reply** control at the foot of the thread, which expands into a
   text field with **Post** and **Cancel**.
 
-Long threads are not collapsed. If that becomes a problem the clip is
-more interesting than the design.
+A thread of more than **five** comments is collapsed to the opening
+comment, a **Show 9 more** control, and the last two. Those are the ends
+that matter: the first says what the thread is about and the last are
+what is being said now. Expanding is local to the visit and not
+remembered.
+
+The collapse counts tombstones but never leaves one as a visible end. If
+the last comment is a deleted one, the collapse takes in the comment
+before it, so what you see is something someone actually wrote.
 
 ### Writing, editing, deleting
 
 Any signed-in user may comment on any clip and reply in any thread.
-Comments are plain text: no Markdown, no rendered HTML, line breaks
-preserved. They are remarks made while listening, and a second rendering
-pipeline for them would buy nothing that a wiki page does not already
-provide for the prose that deserves it.
+
+Comments are **Markdown**, stored as source and rendered on read. That is
+what the wiki already does, and the reasoning carries over unchanged: see
+[the wiki spec](../implemented/label-wiki.md). The stored form is the
+text the author typed; the HTML the web serves and the widget tree the
+phone builds are both derived from it, by each surface, at read time.
+
+That is the structural form worth keeping. It survives a change of
+renderer, it is what an edit reopens, and it is what a diff is taken of.
+A syntax tree on disk would be comrak's node types written into the
+schema, which is the same idea done worse — the parse is cheap and the
+commitment is not.
+
+Rendering goes through the same `src/markdown.rs` the wiki uses, so
+comments inherit its safety properties rather than growing a second
+pipeline: raw HTML escaped, dangerous URL schemes stripped, `[[label]]`
+retargeted to the label's filtered view. The enabled feature set is
+narrowed to what a remark needs — emphasis, code, links, lists,
+blockquotes — with headings, tables and images left out, since a heading
+inside a remark about four seconds of audio is not a thing anyone means.
+
+The composer is a plain text field: no toolbar, no live preview. People
+who write Markdown will write it and people who do not will type
+sentences and get sentences.
+
+**Mentions are not part of this change**, and the storage is chosen so
+they can be added without a migration. `@simon` would be a render-time
+extension exactly as `[[label]]` already is — the source keeps what the
+author typed and the renderer turns a known username into a link. The
+part that needs designing is the notification, which is what anyone
+typing an `@` will expect to happen, and that is its own issue.
 
 A body is at most 4 KiB and cannot be empty or only whitespace. Leading
 and trailing whitespace is trimmed.
 
 You may edit and delete **your own** comments, with no time limit. The
 server enforces this, not just the UI. Editing shows the field prefilled;
-saving stamps the comment `edited` next to its time. An edit is not
-posted to Discord — only new comments are — because a channel that
-reported every typo fix would be a channel people mute.
+saving stamps the comment `edited` next to its time.
+
+An edit posts to Discord too, worded as an edit. The channel is a feed of
+what is being said and a correction is part of that; a quiet edit is the
+one that misleads the people who read the channel instead of the site,
+and a band of five does not produce enough typo fixes to be worth
+filtering out. If it does turn out to be noise, the fix is to drop edits
+or delay them, and that is one branch in one function.
+
+A delete posts nothing. There is nothing to show.
 
 Deleting is real: the body is erased and the row is kept as a tombstone
 rendered as *comment deleted*, so replies that answer it keep their
@@ -124,8 +178,8 @@ than one that failed.
 
 ### Discord
 
-Every new comment is posted, whether it opened a thread or answered one.
-It uses the webhook already configured in `IGGYBILLY_DISCORD_WEBHOOK_URL`
+Every comment is posted: new threads, replies, and edits alike. It uses
+the webhook already configured in `IGGYBILLY_DISCORD_WEBHOOK_URL`
 and follows the existing rules: fire-and-forget on a spawned task, logged
 at WARN on failure, never able to fail or slow the request that caused
 it, and silently disabled when no webhook is configured.
@@ -140,15 +194,24 @@ A reply:
     💬 **simon** replied to a comment on [Riff](https://iggybilly.example/clips/7) at 0:14
     >>> it is, I'll do it again
 
+An edit:
+
+    ✏️ **simon** edited a comment on [Riff](https://iggybilly.example/clips/7) at 0:14
+    >>> it is, I'll do it again properly
+
 Without `IGGYBILLY_BASE_URL` the clip is a bolded name instead of a link,
 as uploads already are. The author and the clip name go through the
 existing `md_escape`, so a clip called `@everyone` cannot ping the
-channel. The body goes through it too and is then quoted with `>>>`,
-which blockquotes the rest of the message — so a body can be as long and
-as full of punctuation as it likes without escaping the message around
-it. Bodies over 500 characters are truncated with `…`; the whole message
-has to fit Discord's 2000-character limit, and the point of the post is
-to make you open the clip.
+channel. The body is Markdown the author wrote, which Discord renders as
+Markdown of its own — near enough the same dialect that it reads as
+intended — so it is **not** escaped, only quoted with `>>>`,
+which blockquotes the rest of the message so the body cannot break the
+line above it. One thing does need neutralising: `@` and `#` are pings in
+Discord and are only text here, so `@everyone`, `@here` and any
+`<@…>`-shaped run in a body have a zero-width space inserted after the
+sigil. Bodies over 500 characters are truncated with `…`; the whole
+message has to fit Discord's 2000-character limit, and the point of the
+post is to make you open the clip.
 
 The integration is **one-way**. An incoming webhook can post and cannot
 read, so replying in Discord does nothing here. Making it two-way means a
@@ -170,15 +233,17 @@ lands.
 -- its replies inherit that without repeating it. It also means the
 -- waveform's pins are a read of one small table.
 --
--- Unlike wiki pages, comments are not versioned. A wiki page is a
--- document the band maintains together and its history is the point; a
--- comment is one person saying one thing, and an edit to it is a
--- correction, not a revision worth keeping.
+-- Bodies are Markdown source, rendered on read by src/markdown.rs, the
+-- same way label_wiki_revisions holds wiki pages. Unlike those, comments
+-- are not versioned: a wiki page is a document the band maintains
+-- together and its history is the point, while a comment is one person
+-- saying one thing and an edit to it is a correction.
 CREATE TABLE comment_threads (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     clip_id    INTEGER NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
-    -- Seconds into the clip. REAL because the interesting moments in a
-    -- two-bar riff are not on second boundaries.
+    -- Seconds into the clip, fractional. REAL because the interesting
+    -- moments in a two-bar riff are not on second boundaries; written
+    -- rounded to the millisecond.
     at_seconds REAL NOT NULL,
     created_by INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
@@ -199,7 +264,7 @@ CREATE INDEX idx_comment_threads_clip ON comment_threads(clip_id, at_seconds, id
 CREATE TABLE comments (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     thread_id  INTEGER NOT NULL REFERENCES comment_threads(id) ON DELETE CASCADE,
-    -- Plain text, not Markdown: these are remarks made while listening.
+    -- Markdown source, as written. Never HTML: rendering happens on read.
     body       TEXT NOT NULL,
     author_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -220,6 +285,12 @@ deleting a clip needs no extra statement in `handlers::clips::remove`.
 `src/queries/comments.rs`, new, in the shape the other query modules
 take: plain domain types with timestamps exactly as SQLite holds them,
 and no opinion about how either surface renders them.
+
+`body` is Markdown source and stays source here. That is deliberately the
+rule `src/queries/wiki.rs` already states for pages: the web wants HTML
+it can drop into the document and the phone renders Markdown itself with
+a Flutter widget, so rendering belongs at the edges and the database
+holds one form.
 
 ```rust
 pub struct Thread {
@@ -311,7 +382,11 @@ Web shape (`camelCase`, as everything there is):
   "comments": [{
     "id": 31,
     "author": "simon",
-    "body": "the entry is late here",
+    // Rendered by src/markdown.rs, as the wiki's HTML is. Safe to embed.
+    "bodyHtml": "<p>the entry is <em>late</em> here</p>\n",
+    // The source, only on comments the viewer may edit — it is what the
+    // composer reopens, and nobody else needs it.
+    "body": "the entry is *late* here",
     // Already Stockholm-local, like every other date in the page props.
     "createdAt": "2026-09-12 18:33",
     "edited": false,
@@ -323,7 +398,15 @@ Web shape (`camelCase`, as everything there is):
 ```
 
 The phone's is the same tree with `createdAt` as `2026-09-12T16:33:07.123Z`,
-`editedAt` as a nullable instant rather than a flag, and no `atLabel`.
+`editedAt` as a nullable instant rather than a flag, and no `atLabel`. It
+also carries `body` and no `bodyHtml`: the app renders Markdown itself
+with a Flutter widget, which is already how it shows a wiki page.
+
+`src/markdown.rs` gains a second entry point for this. `render` keeps the
+wiki's option set; a new `render_inline` enables the narrower set from
+"Writing, editing, deleting" — the same safety flags, minus headings,
+tables and images — so the two callers cannot drift apart in what they
+consider safe. The wikilink retargeting is shared.
 
 The clip page's props (`ClipProps` in `src/handlers/clips.rs`) gain
 `comments: Vec<CommentThread>` so the first paint needs no fetch, exactly
@@ -342,30 +425,38 @@ pub fn comment_posted(
     clip: (i64, &str),
     at_seconds: f64,
     body: &str,
-    is_reply: bool,
+    kind: CommentPostKind, // New, Reply, Edit
 )
 ```
 
 with a `comment_message` private function built and unit-tested like the
-existing two: the verb switches on `is_reply`, the clip goes through
-`clip_link`, the time is formatted `m:ss` by a small helper here rather
-than borrowed from the frontend, and the body is `md_escape`d, truncated
-to 500 characters, and prefixed with `>>> `. The tests mirror the
-existing ones, including one asserting that a body containing
-`@everyone` and a masked link comes out inert.
+existing two: the verb and the emoji switch on `kind`, the clip goes
+through `clip_link`, and the time is formatted `m:ss` by a small helper
+here rather than borrowed from the frontend.
 
-Called from the create and reply paths in both `src/handlers/comments.rs`
-and `src/api/comments.rs` — or, better, from a shared
-`pub(crate)` function in the handlers module that both call, the way
-`ingest`, `remove` and `set_name` are already shared.
+The body is the one part that differs from the existing messages. It is
+Markdown either way, and Discord's dialect is close enough that it should
+be passed through rather than `md_escape`d — escaping it would show
+people their own asterisks back. So instead: truncate to 500 characters,
+defuse the ping sigils as described above, and prefix with `>>> `. Unit
+tests mirror the existing ones and must include a body containing
+`@everyone`, a masked link, and a fenced code block with a `>>>` inside
+it.
+
+Called from the create, reply and edit paths in both
+`src/handlers/comments.rs` and `src/api/comments.rs` — or, better, from a
+shared `pub(crate)` function in the handlers module that both call, the
+way `ingest`, `remove` and `set_name` are already shared.
 
 ### Web frontend
 
 - `web/src/components/Comments.tsx` — new: the strip, the pins, the
-  pending anchor, the thread list, the composer and the reply forms. It
-  takes the clip, its duration and the initial threads, and owns the
-  thread list as state from then on since every write hands back a fresh
-  one.
+  pending anchor, the thread list, the collapse control, the composer and
+  the reply forms. It takes the clip, its duration and the initial
+  threads, and owns the thread list as state from then on since every
+  write hands back a fresh one. A body is `bodyHtml` through
+  `dangerouslySetInnerHTML`, as `WikiPanel.tsx` already does and for the
+  same documented reason; the scoped lint disable goes with it.
 - `web/src/pages/clip.tsx` — render `<Comments …/>` under the existing
   `<Player>`, and add the **Comment at …** button to `.player-controls`.
 - `web/src/pages/index.tsx` — the comment count on a row, next to the
@@ -391,8 +482,10 @@ so in its `title`.
 - `mobile/lib/src/api/client.dart` — `comments(clipId)`,
   `postComment(clipId, {threadId, atSeconds, body})`,
   `editComment(id, body)`, `deleteComment(id)`.
-- `mobile/lib/src/ui/comments.dart` — new: the thread list, the composer
-  sheet and the reply field, as a widget the clip screen embeds.
+- `mobile/lib/src/ui/comments.dart` — new: the thread list, the collapse
+  control, the composer sheet and the reply field, as a widget the clip
+  screen embeds. Bodies go through the same Markdown widget the wiki
+  page uses.
 - `mobile/lib/src/ui/clip_page.dart` — a Comments section under the
   existing player row, plus a **Comment at m:ss** button beside play.
 - `mobile/lib/src/ui/waveform.dart` — an optional `markers: List<double>`
@@ -427,3 +520,12 @@ is edited" — gains comments and says the integration is one-way.
 - **The clip list shows a count and nothing else.** A "recent comments"
   view — everything said across all clips, newest first — would be the
   natural way to catch up, and is a separate page and a separate issue.
+- **Mentions are storage-ready but unbuilt.** `@simon` is a render-time
+  extension whenever someone wants it. What needs deciding first is what
+  a mention *does*: a link only, a Discord ping of the mapped account, or
+  something in the app. Its own issue.
+- **Markdown in a Discord post is passed through rather than escaped.**
+  That is right for the common case and slightly wrong for a body that
+  leans on a construct Discord reads differently, such as a fenced block
+  inside a `>>>` quote. The alternative is escaping, which is worse for
+  every ordinary comment.

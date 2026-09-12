@@ -14,3 +14,6 @@
 # Whose phone and whose Apple team. Symlink your own in; see
 # local/devices.env.example.
 /local/devices.env
+
+# The App Store Connect API key, likewise. See local/appstore.env.example.
+/local/appstore.env

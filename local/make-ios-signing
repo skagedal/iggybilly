@@ -1,0 +1,293 @@
+#!/usr/bin/env bash
+#
+# Make everything the iOS half of a release needs, without Xcode and
+# without the developer portal:
+#
+#   ./local/make-ios-signing
+#
+# First run: generates a private key and a signing request, has App Store
+# Connect issue an Apple Distribution certificate against it, bundles the
+# two into a .p12, registers the bundle id if it is new, makes an App
+# Store provisioning profile naming that certificate, and sets the seven
+# GitHub secrets the release workflow reads.
+#
+# Later runs reuse the certificate and replace only the profile, which is
+# what a profile expiring once a year asks for. An account is allowed
+# very few distribution certificates, and asking for another when the one
+# you have still works is how you run out.
+#
+# Everything it makes is kept in ~/.apple-signing, outside the repository.
+# Back that directory up: the private key in it exists nowhere else, and
+# without it the certificate is a dead letter.
+#
+# Two things it cannot do, because App Store Connect has no API for
+# either: create the API key it authenticates with, and create the app
+# record a build is uploaded against. Both are web-only, and both once.
+#
+# Configuration comes from local/appstore.env and local/devices.env, both
+# gitignored. See local/appstore.env.example.
+
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+bundle_id="tech.skagedal.iggybilly"
+profile_name="iggybilly App Store"
+output_dir="$HOME/.apple-signing"
+
+die() {
+    echo "make-ios-signing: $*" >&2
+    exit 1
+}
+
+case "${1:-}" in
+    -h | --help)
+        awk 'NR > 2 && /^#/ { sub(/^# ?/, ""); print; next } NR > 2 { exit }' "$0"
+        exit 0
+        ;;
+    "") ;;
+    *) die "unknown option: $1 (it takes none)" ;;
+esac
+
+for tool in openssl curl jq xxd gh; do
+    command -v "$tool" > /dev/null 2>&1 || die "$tool not found on PATH."
+done
+
+# gh reads the repository from the working directory, and this may be run
+# from anywhere.
+cd "$root"
+
+appstore_env="$root/local/appstore.env"
+devices_env="$root/local/devices.env"
+
+[ -f "$appstore_env" ] || die "no local/appstore.env.
+Copy local/appstore.env.example to it and fill in the App Store Connect
+API key you made under Users and Access, Integrations."
+[ -f "$devices_env" ] || die "no local/devices.env. See local/devices.env.example."
+
+# shellcheck source=/dev/null
+. "$appstore_env"
+# shellcheck source=/dev/null
+. "$devices_env"
+
+: "${APP_STORE_CONNECT_KEY_ID:?not set in local/appstore.env}"
+: "${APP_STORE_CONNECT_ISSUER_ID:?not set in local/appstore.env}"
+: "${APP_STORE_CONNECT_KEY_FILE:?not set in local/appstore.env}"
+: "${IOS_TEAM:?not set in local/devices.env}"
+
+key_file="${APP_STORE_CONNECT_KEY_FILE/#\~/$HOME}"
+[ -f "$key_file" ] || die "no API key at $key_file."
+
+private_key="$output_dir/iggybilly-distribution.key.pem"
+certificate="$output_dir/iggybilly-distribution.cer.pem"
+bundle="$output_dir/iggybilly-distribution.p12"
+bundle_password_file="$output_dir/iggybilly-distribution.p12.password"
+certificate_id_file="$output_dir/iggybilly-distribution.certificate-id"
+profile="$output_dir/iggybilly-appstore.mobileprovision"
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+## Talking to App Store Connect
+
+b64url() {
+    base64 | tr -d '\n' | tr '+/' '-_' | tr -d '='
+}
+
+# Left-pad a hex string to the 32 bytes one half of an ES256 signature is.
+pad32() {
+    local hex
+    hex="$(printf '%s' "$1" | sed 's/^0*//')"
+    printf '%064s' "$hex" | tr ' ' 0
+}
+
+# The API takes a short-lived ES256 JWT rather than the key itself. JOSE
+# wants the signature as raw r||s; openssl emits a DER SEQUENCE of two
+# INTEGERs, either of which may carry a sign byte or be short. Hence
+# unpacking it rather than base64-ing what openssl hands over.
+mint_token() {
+    local now header payload signing_input der r s
+    now="$(date +%s)"
+    header="$(jq -nc --arg kid "$APP_STORE_CONNECT_KEY_ID" \
+        '{alg: "ES256", kid: $kid, typ: "JWT"}')"
+    payload="$(jq -nc --arg iss "$APP_STORE_CONNECT_ISSUER_ID" --argjson now "$now" \
+        '{iss: $iss, iat: $now, exp: ($now + 600), aud: "appstoreconnect-v1"}')"
+
+    signing_input="$(printf '%s' "$header" | b64url).$(printf '%s' "$payload" | b64url)"
+
+    der="$work/signature.der"
+    printf '%s' "$signing_input" | openssl dgst -sha256 -sign "$key_file" > "$der"
+
+    r="$(openssl asn1parse -inform DER -in "$der" | awk -F: '/INTEGER/ {print $4}' | sed -n 1p)"
+    s="$(openssl asn1parse -inform DER -in "$der" | awk -F: '/INTEGER/ {print $4}' | sed -n 2p)"
+
+    printf '%s.%s' "$signing_input" \
+        "$(printf '%s%s' "$(pad32 "$r")" "$(pad32 "$s")" | xxd -r -p | b64url)"
+}
+
+# Every call goes through here, so that a refusal is reported as the
+# sentence Apple wrote rather than as a later jq finding no field in a
+# body nobody looked at.
+api() {
+    local method="$1" path="$2" body="${3:-}" response
+    if [ -n "$body" ]; then
+        response="$(curl -sS -X "$method" "https://api.appstoreconnect.apple.com$path" \
+            -H "Authorization: Bearer $token" \
+            -H "Content-Type: application/json" \
+            -d "$body")"
+    else
+        response="$(curl -sS -X "$method" "https://api.appstoreconnect.apple.com$path" \
+            -H "Authorization: Bearer $token")"
+    fi
+
+    # A successful DELETE says nothing at all.
+    [ -n "$response" ] || return 0
+
+    printf '%s' "$response" | jq -e . > /dev/null 2>&1 || {
+        echo "make-ios-signing: $method $path did not answer with JSON:" >&2
+        printf '%s\n' "$response" | head -c 2000 >&2
+        exit 1
+    }
+
+    if printf '%s' "$response" | jq -e 'has("errors")' > /dev/null; then
+        echo "make-ios-signing: App Store Connect refused $method $path:" >&2
+        printf '%s' "$response" | jq -r '.errors[] | "  \(.title): \(.detail)"' >&2
+        exit 1
+    fi
+
+    printf '%s' "$response"
+}
+
+token="$(mint_token)"
+
+mkdir -p "$output_dir"
+chmod 700 "$output_dir"
+
+## The certificate
+
+if [ -e "$bundle" ]; then
+    echo "make-ios-signing: reusing the certificate in $output_dir" >&2
+    [ -f "$certificate_id_file" ] ||
+        die "$bundle is there but $certificate_id_file is not, so there is
+no way to tell Apple which certificate the profile should name. Move the
+whole of $output_dir aside and run this again to start over."
+    certificate_id="$(cat "$certificate_id_file")"
+    bundle_password="$(cat "$bundle_password_file")"
+else
+    echo "make-ios-signing: asking for an Apple Distribution certificate" >&2
+
+    existing="$(api GET '/v1/certificates?filter[certificateType]=DISTRIBUTION&limit=200' |
+        jq -r '.data[] | "  \(.attributes.name), expires \(.attributes.expirationDate)"')"
+    if [ -n "$existing" ]; then
+        echo "make-ios-signing: this account already has distribution certificates:" >&2
+        printf '%s\n' "$existing" >&2
+        echo "make-ios-signing: asking for one more. If Apple refuses, revoke one of those." >&2
+    fi
+
+    bundle_password="$(openssl rand -base64 24)"
+
+    openssl req -new -newkey rsa:2048 -nodes \
+        -keyout "$private_key" \
+        -out "$work/request.csr" \
+        -subj "/CN=iggybilly Distribution/O=skagedal/C=SE" 2> /dev/null
+    chmod 600 "$private_key"
+
+    api POST /v1/certificates "$(jq -nc \
+        --rawfile csr "$work/request.csr" \
+        '{data: {type: "certificates", attributes: {csrContent: $csr, certificateType: "DISTRIBUTION"}}}')" \
+        > "$work/certificate.json"
+
+    certificate_id="$(jq -r '.data.id' "$work/certificate.json")"
+
+    jq -r '.data.attributes.certificateContent' "$work/certificate.json" |
+        base64 -d |
+        openssl x509 -inform DER -out "$certificate"
+
+    # 3DES rather than the modern default: this .p12 is imported by
+    # /usr/bin/security on a runner, the fussier of the two ends.
+    openssl pkcs12 -export \
+        -inkey "$private_key" \
+        -in "$certificate" \
+        -out "$bundle" \
+        -name "iggybilly distribution" \
+        -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1 \
+        -passout "pass:$bundle_password"
+
+    (umask 077; printf '%s' "$bundle_password" > "$bundle_password_file")
+    (umask 077; printf '%s' "$certificate_id" > "$certificate_id_file")
+    chmod 600 "$bundle"
+fi
+
+## The bundle id and the profile
+
+echo "make-ios-signing: making sure $bundle_id is registered" >&2
+
+bundle_id_id="$(api GET "/v1/bundleIds?filter[identifier]=$bundle_id&filter[platform]=IOS" |
+    jq -r '.data[0].id // empty')"
+
+if [ -z "$bundle_id_id" ]; then
+    bundle_id_id="$(api POST /v1/bundleIds "$(jq -nc --arg identifier "$bundle_id" \
+        '{data: {type: "bundleIds", attributes: {identifier: $identifier, name: "iggybilly", platform: "IOS"}}}')" |
+        jq -r '.data.id')"
+    echo "make-ios-signing: registered it" >&2
+fi
+
+# A profile is disposable in a way a certificate is not: another can be
+# made from the same certificate at any time. So a stale one of our own
+# name is deleted rather than worked around.
+old_profile="$(api GET '/v1/profiles?limit=200' |
+    jq -r --arg name "$profile_name" '.data[] | select(.attributes.name == $name) | .id')"
+if [ -n "$old_profile" ]; then
+    echo "make-ios-signing: replacing the existing '$profile_name' profile" >&2
+    api DELETE "/v1/profiles/$old_profile" > /dev/null
+fi
+
+echo "make-ios-signing: making the App Store profile" >&2
+
+api POST /v1/profiles "$(jq -nc \
+    --arg name "$profile_name" \
+    --arg bundle "$bundle_id_id" \
+    --arg certificate "$certificate_id" \
+    '{data: {
+        type: "profiles",
+        attributes: {name: $name, profileType: "IOS_APP_STORE"},
+        relationships: {
+            bundleId: {data: {type: "bundleIds", id: $bundle}},
+            certificates: {data: [{type: "certificates", id: $certificate}]}
+        }
+    }}')" | jq -r '.data.attributes.profileContent' | base64 -d > "$profile"
+
+## The secrets
+
+echo "make-ios-signing: setting the GitHub secrets" >&2
+
+base64 < "$bundle" | gh secret set IOS_DIST_CERT_P12_BASE64
+printf '%s' "$bundle_password" | gh secret set IOS_DIST_CERT_PASSWORD
+base64 < "$profile" | gh secret set IOS_PROVISIONING_PROFILE_BASE64
+printf '%s' "$IOS_TEAM" | gh secret set IOS_TEAM_ID
+printf '%s' "$APP_STORE_CONNECT_KEY_ID" | gh secret set APP_STORE_CONNECT_KEY_ID
+printf '%s' "$APP_STORE_CONNECT_ISSUER_ID" | gh secret set APP_STORE_CONNECT_ISSUER_ID
+gh secret set APP_STORE_CONNECT_PRIVATE_KEY < "$key_file"
+
+cat >&2 <<MESSAGE
+
+make-ios-signing: done. All seven iOS secrets are set.
+
+  private key   $private_key
+  certificate   $certificate
+  bundle        $bundle
+  profile       $profile
+
+Back up $output_dir. The private key in it exists nowhere else.
+
+Two things left, both web-only and both once:
+
+1. Create the app record for $bundle_id in App Store Connect, if it is
+   not there. An upload has nowhere to land without one.
+
+2. Turn the iOS job on:
+
+     gh variable set IOS_RELEASE --body enabled
+
+The profile expires in a year. Run this again then: it replaces the
+profile and leaves the certificate alone.
+MESSAGE

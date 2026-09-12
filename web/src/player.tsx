@@ -348,8 +348,9 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     }
     // Leave the last track loaded and wound back, so the obvious next
     // gesture — press play again — works.
-    setIsPlaying(false);
-    waveSurferRef.current?.setTime(0);
+    const ws = waveSurferRef.current;
+    ws?.pause();
+    ws?.setTime(0);
   }, [queue, track, repeat, start]);
 
   const stop = useCallback(() => {

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use axum::{
     body::Body,
     extract::{Multipart, Path as AxumPath, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    http::{header, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use sqlx::SqlitePool;
 use tokio::io::AsyncWriteExt;
-use tokio_util::io::ReaderStream;
+use tower::ServiceExt;
+use tower_http::services::ServeFile;
 
 use crate::{
     error::{AppError, AppResult},
@@ -331,6 +332,7 @@ pub async fn audio(
     _user: MediaUser,
     AxumPath(id): AxumPath<i64>,
     Query(q): Query<AudioQuery>,
+    request: axum::extract::Request,
 ) -> AppResult<Response> {
     let file_row = queries::clips::audio_file(&state.pool, id)
         .await?
@@ -342,18 +344,31 @@ pub async fn audio(
     } = file_row;
 
     let path = state.config.audio_dir.join(&storage);
-    // Stream from disk so we don't pull the whole file into RAM. Browsers
-    // need Content-Length up front to show download progress and to
-    // support range requests if/when we add them later.
-    let file = tokio::fs::File::open(&path).await?;
-    let len = file.metadata().await?.len();
-    let stream = ReaderStream::new(file);
-    let body = Body::from_stream(stream);
 
-    let mut headers = HeaderMap::new();
+    // Served by ServeFile rather than by hand, because it answers Range
+    // requests: 206 with a Content-Range, 416 when unsatisfiable, plus
+    // If-Range and HEAD. That is not a nicety. AVPlayer on iOS refuses to
+    // play a remote asset at all — "(-11850) Operation Stopped" — when the
+    // server ignores Range and returns the whole body with a 200, which is
+    // what this route used to do. A browser's <audio> tolerates it, so the
+    // web worked and the app did not.
+    let response = ServeFile::new(&path)
+        .oneshot(request)
+        .await
+        .map_err(|e| AppError::Io(std::io::Error::other(e)))?;
+
+    if response.status() == StatusCode::NOT_FOUND {
+        // The row exists but its bytes don't.
+        return Err(AppError::NotFound);
+    }
+
+    let mut response = response.map(Body::new);
+    let headers = response.headers_mut();
+
     // content_type is what we wrote at upload time — one of our
-    // allow-listed audio MIME types, never the uploader's claim. Pair
-    // with nosniff so a curious browser doesn't reinterpret it as HTML.
+    // allow-listed audio MIME types, never the uploader's claim, and never
+    // ServeFile's guess from the extension. Pair with nosniff so a curious
+    // browser doesn't reinterpret it as HTML.
     headers.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_str(&content_type)
@@ -363,7 +378,6 @@ pub async fn audio(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
     );
-    headers.insert(header::CONTENT_LENGTH, HeaderValue::from(len));
     headers.insert(
         header::CACHE_CONTROL,
         HeaderValue::from_static("private, max-age=3600"),
@@ -379,7 +393,7 @@ pub async fn audio(
             headers.insert(header::CONTENT_DISPOSITION, v);
         }
     }
-    Ok((headers, body).into_response())
+    Ok(response)
 }
 
 /// Replace anything that isn't a plain ASCII filename-safe character

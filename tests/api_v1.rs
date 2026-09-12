@@ -447,6 +447,48 @@ async fn audio_is_served_to_a_bearer_token() {
 }
 
 #[tokio::test]
+async fn audio_answers_range_requests() {
+    // AVPlayer on iOS will not play a remote asset from a server that
+    // ignores Range — it fails with "(-11850) Operation Stopped" before
+    // playback ever starts. A browser's <audio> tolerates a plain 200, so
+    // this breaks the app and nothing else, which is why it is asserted
+    // here rather than left to be noticed on a device.
+    let srv = start().await;
+    let (c, token) = signed_in(&srv).await;
+    let ids = upload(&srv, &c, &token, &["riff.mp3"]).await;
+    let url = format!("{}/clips/{}/audio", srv.base, ids[0]);
+
+    let full = c.get(&url).bearer_auth(&token).send().await.unwrap();
+    assert_eq!(full.status(), 200);
+    assert_eq!(
+        full.headers()["accept-ranges"],
+        "bytes",
+        "the route must advertise that it takes ranges"
+    );
+
+    let part = c
+        .get(&url)
+        .bearer_auth(&token)
+        .header("range", "bytes=0-3")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(part.status(), 206, "a Range request gets partial content");
+    assert_eq!(part.headers()["content-range"], "bytes 0-3/16");
+    assert_eq!(part.bytes().await.unwrap().as_ref(), b"fake");
+
+    // A range past the end is refused, not silently clamped.
+    let past = c
+        .get(&url)
+        .bearer_auth(&token)
+        .header("range", "bytes=900-999")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(past.status(), 416);
+}
+
+#[tokio::test]
 async fn devices_can_be_listed_and_revoked_one_at_a_time() {
     let srv = start().await;
     let (phone, phone_token) = signed_in(&srv).await;

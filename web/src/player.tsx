@@ -258,6 +258,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // for a clip that has just been deleted has nothing to show.
   const stop = useCallback(() => {
     setTrack(null);
+    // Dropping the position too: stopping and then playing the same clip
+    // rebuilds the instance at zero, and a kept position would be read as
+    // still belonging to it until the first timeupdate.
+    setPlayed({ clipId: null, seconds: 0 });
     setExpanded(false);
   }, []);
 

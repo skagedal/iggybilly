@@ -180,52 +180,76 @@ automatic updates, so a new release is a link you send them.
 
 ### Setting up the Apple side
 
-Once, and none of it is quick the first time. It needs the Apple
-Developer Program, which is the yearly fee; there is no free path onto
-someone else's iPhone that they would thank you for.
+It needs the Apple Developer Program, which is the yearly fee. There is
+no free path onto someone else's iPhone that they would thank you for.
 
-1. Register the bundle id `tech.skagedal.iggybilly` on the developer
-   portal, and create the matching app record in App Store Connect. The
-   upload has nowhere to land until that record exists.
-2. Make an **Apple Distribution** certificate, in Xcode under Settings →
-   Accounts → Manage Certificates, and export it from Keychain Access as
-   a `.p12` with a password. Both halves become secrets below.
-3. Make an **App Store** provisioning profile for that bundle id against
-   that certificate, and download the `.mobileprovision`. Its name is
-   read out of the file itself by `ci/setup-ios-signing`, so it is not
-   another thing to keep in step.
-4. Make an App Store Connect API key with the App Manager role, under
-   Users and Access → Integrations. The `.p8` downloads once and never
-   again.
+Two things have to be done by hand first, because App Store Connect has
+no API for either:
 
-That is nine repository secrets in all, counting the two the keystore
-script printed commands for. None should be pasted anywhere they can be
-scrolled back to:
+1. **An App Store Connect API key**, under Users and Access →
+   Integrations. Give it the **Admin** role. App Manager is enough to
+   upload builds, but not to have a certificate issued, and the script
+   below asks for one. The `.p8` downloads once and never again.
+2. **The app record** for `tech.skagedal.iggybilly` in App Store
+   Connect. An upload has nowhere to land until it exists.
 
-| Secret | What it is |
-| --- | --- |
-| `ANDROID_KEYSTORE_BASE64` | the keystore, base64 |
-| `ANDROID_KEYSTORE_PASSWORD` | its password |
-| `IOS_DIST_CERT_P12_BASE64` | the distribution certificate, base64 |
-| `IOS_DIST_CERT_PASSWORD` | the password you exported it under |
-| `IOS_PROVISIONING_PROFILE_BASE64` | the App Store profile, base64 |
-| `IOS_TEAM_ID` | the team id, the `IOS_TEAM` in `local/devices.env` |
-| `APP_STORE_CONNECT_KEY_ID` | the API key's id |
-| `APP_STORE_CONNECT_ISSUER_ID` | the issuer id shown above the key list |
-| `APP_STORE_CONNECT_PRIVATE_KEY` | the contents of the `.p8` |
+Then point a config file at that key and run one script:
 
-    base64 < distribution.p12 | gh secret set IOS_DIST_CERT_P12_BASE64
-    base64 < iggybilly.mobileprovision | gh secret set IOS_PROVISIONING_PROFILE_BASE64
-    gh secret set APP_STORE_CONNECT_PRIVATE_KEY < AuthKey_XXXXXXXXXX.p8
+    cp local/appstore.env.example local/appstore.env
+    $EDITOR local/appstore.env
+    ./local/make-ios-signing
 
-The iOS job does not run until it is switched on, so that shipping
-Android before any of this exists is a green release rather than half a
-red one:
+It generates a private key and a signing request, has App Store Connect
+issue the Apple Distribution certificate against it, bundles the two into
+a `.p12`, registers the bundle id if it is new, makes the App Store
+provisioning profile, and sets all seven iOS secrets. No Xcode, no
+Keychain Access, no developer portal.
+
+Back up `~/.apple-signing` afterwards, the way you backed up the
+keystore. The private key is in there and nowhere else, and a certificate
+whose private key is gone is a dead letter.
+
+Then turn the job on:
 
     gh variable set IOS_RELEASE --body enabled
 
-Until then every release page says so, which is the point: a half-built
-pipeline that quietly ships one platform is worse than one that fails.
+Until you do, the iOS job does not run and every release page says so —
+shipping Android before the Apple side exists should be a green release
+rather than half a red one, but a half-built pipeline that quietly ships
+one platform is worse than one that fails.
+
+Run `make-ios-signing` again in a year. The certificate and the profile
+both expire a year after they are issued, so a yearly run renews both:
+the profile every time, the certificate only once the one you have is
+nearly out. That last part matters because an account is allowed very few
+live distribution certificates, and asking for another while the one you
+have still works is how you run out. Superseded material is moved aside
+rather than deleted.
+
+### What ends up in the repository's secrets
+
+Nine, and nothing should be pasted anywhere it can be scrolled back to.
+The two scripts pipe rather than print, for that reason.
+
+| Secret | What it is | Set by |
+| --- | --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | the keystore, base64 | you, from `make-release-keystore` |
+| `ANDROID_KEYSTORE_PASSWORD` | its password | you, from `make-release-keystore` |
+| `IOS_DIST_CERT_P12_BASE64` | the distribution certificate and its key | `make-ios-signing` |
+| `IOS_DIST_CERT_PASSWORD` | the password that bundle was made under | `make-ios-signing` |
+| `IOS_PROVISIONING_PROFILE_BASE64` | the App Store profile | `make-ios-signing` |
+| `IOS_TEAM_ID` | the team id, the `IOS_TEAM` in `local/devices.env` | `make-ios-signing` |
+| `APP_STORE_CONNECT_KEY_ID` | the API key's id | `make-ios-signing` |
+| `APP_STORE_CONNECT_ISSUER_ID` | the issuer id shown above the key list | `make-ios-signing` |
+| `APP_STORE_CONNECT_PRIVATE_KEY` | the contents of the `.p8` | `make-ios-signing` |
+
+Doing any of the iOS half by hand instead is perfectly possible: make the
+certificate in Xcode under Settings → Accounts → Manage Certificates,
+export it from Keychain Access as a `.p12`, make an App Store profile on
+the developer portal, and set the secrets yourself. The script exists
+because that is an afternoon of clicking that comes back every year.
+
+### Two ways of signing
 
 Xcode signs in one of two modes, and this app uses a different one in
 each place. On your machine it is *automatic*: Xcode talks to Apple as

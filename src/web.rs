@@ -137,6 +137,7 @@ pub async fn build_app(pool: SqlitePool, config: Arc<Config>) -> Result<Router> 
             axum::routing::delete(labels::remove),
         )
         .route("/labels/search", get(labels::search))
+        .route("/labels/{id}/order", post(labels::order))
         .route(
             "/labels/{id}/wiki",
             get(labels::wiki_view).post(labels::wiki_save),

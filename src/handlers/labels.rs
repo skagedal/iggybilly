@@ -66,6 +66,45 @@ pub async fn remove(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrderRequest {
+    pub clip_id: i64,
+    /// The clip to land behind, or null to move to the front.
+    pub after_clip_id: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct OrderResponse {
+    /// The label's clip ids as they now stand. The client applies this
+    /// rather than trusting the order it moved the row to optimistically.
+    pub order: Vec<i64>,
+}
+
+/// POST /api/labels/{id}/order
+pub async fn order(
+    State(state): State<AppState>,
+    _user: ApiUser,
+    AxumPath(label_id): AxumPath<i64>,
+    Json(req): Json<OrderRequest>,
+) -> AppResult<Response> {
+    Ok(Json(set_order(&state, label_id, &req).await?).into_response())
+}
+
+/// Move a clip within a label's playlist. Shared with the app's own
+/// order route, so both surfaces reject the same requests: a label that
+/// doesn't exist is a 404, a clip that doesn't carry it a 400.
+pub(crate) async fn set_order(
+    state: &AppState,
+    label_id: i64,
+    req: &OrderRequest,
+) -> AppResult<OrderResponse> {
+    label_name(state, label_id).await?;
+    let order =
+        queries::labels::reorder(&state.pool, label_id, req.clip_id, req.after_clip_id).await?;
+    Ok(OrderResponse { order })
+}
+
+#[derive(Deserialize)]
 pub struct SearchQuery {
     q: Option<String>,
     clip_id: Option<i64>,

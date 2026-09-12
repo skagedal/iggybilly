@@ -61,8 +61,10 @@ pub fn router() -> Router<AppState> {
         .route("/clips/{id}/name", post(clips::rename))
         .route("/clips/{id}/labels", post(labels::add))
         .route("/clips/{id}/labels/{label_id}", delete(labels::remove))
-        // Labels and their wiki pages.
+        // Labels: the playlist their clips form, and their wiki pages.
         .route("/labels/search", get(labels::search))
+        .route("/labels/{id}/playlist", get(labels::playlist))
+        .route("/labels/{id}/order", post(labels::order))
         .route(
             "/labels/{id}/wiki",
             get(labels::wiki).post(labels::save_wiki),

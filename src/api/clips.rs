@@ -53,7 +53,7 @@ pub struct Clip {
     can_delete: bool,
 }
 
-fn clip(c: queries::clips::Clip, viewer_id: i64) -> Clip {
+pub(super) fn clip(c: queries::clips::Clip, viewer_id: i64) -> Clip {
     Clip {
         audio_url: format!("/clips/{}/audio", c.id),
         download_url: format!("/clips/{}/audio?download=1", c.id),
@@ -106,11 +106,15 @@ pub async fn list(
     }
     let active_strs: Vec<&str> = active.iter().map(|s| s.as_str()).collect();
 
-    let clips: Vec<Clip> = queries::clips::list(&state.pool, &active_strs)
-        .await?
-        .into_iter()
-        .map(|c| clip(c, user.id))
-        .collect();
+    // Always newest first here: the playlist order of a single label is
+    // its own route, so this one keeps the shape every installed app
+    // already expects.
+    let clips: Vec<Clip> =
+        queries::clips::list(&state.pool, &active_strs, queries::clips::ListOrder::Recent)
+            .await?
+            .into_iter()
+            .map(|c| clip(c, user.id))
+            .collect();
     Ok(Json(clips).into_response())
 }
 

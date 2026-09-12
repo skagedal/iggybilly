@@ -86,9 +86,24 @@ fn row_to_clip(row: ClipRow, labels: Vec<Label>) -> Clip {
     }
 }
 
-/// Every clip carrying *all* of `active` (an AND filter), newest first.
-/// An empty filter lists everything.
-pub async fn list(pool: &SqlitePool, active: &[&str]) -> AppResult<Vec<Clip>> {
+/// How a clip list is ordered.
+///
+/// The caller decides, because "is this a playlist view" is a question
+/// about the request — exactly one label filter — not about the data.
+#[derive(Debug, Clone, Copy)]
+pub enum ListOrder {
+    /// Newest upload first: the unfiltered list, and every list with
+    /// more than one filter, where an intersection has no order of its
+    /// own to show.
+    Recent,
+    /// A label's playlist order. Only meaningful when that label is the
+    /// single active filter.
+    Playlist { label_id: i64 },
+}
+
+/// Every clip carrying *all* of `active` (an AND filter), in `order`.
+/// An empty filter lists everything, newest first.
+pub async fn list(pool: &SqlitePool, active: &[&str], order: ListOrder) -> AppResult<Vec<Clip>> {
     let rows: Vec<ClipRow> = if active.is_empty() {
         sqlx::query_as(&format!(
             "SELECT {CLIP_COLUMNS}
@@ -103,18 +118,34 @@ pub async fn list(pool: &SqlitePool, active: &[&str]) -> AppResult<Vec<Clip>> {
         // an IN-list, so the placeholders are built by hand — the values
         // are still bound, never interpolated.
         let placeholders = vec!["?"; active.len()].join(", ");
+        // Playlist order joins the ordering label's membership rows of
+        // its own: `cl` is grouped away by the AND filter, and the
+        // position we want is the one under *that* label. Ties are
+        // broken by clip id, so equal positions still list stably.
+        let (order_join, order_by) = match order {
+            ListOrder::Recent => ("", "ORDER BY c.uploaded_at DESC"),
+            ListOrder::Playlist { .. } => (
+                "JOIN clip_labels ord ON ord.clip_id = c.id AND ord.label_id = ?",
+                "ORDER BY ord.position, c.id",
+            ),
+        };
         let sql = format!(
             "SELECT {CLIP_COLUMNS}
              FROM clips c
              JOIN users u ON u.id = c.uploaded_by
              JOIN clip_labels cl ON cl.clip_id = c.id
              JOIN labels l ON l.id = cl.label_id
+             {order_join}
              WHERE l.name IN ({placeholders}) COLLATE NOCASE
              GROUP BY c.id
              HAVING COUNT(DISTINCT l.id) = ?
-             ORDER BY c.uploaded_at DESC"
+             {order_by}"
         );
         let mut q = sqlx::query_as(&sql);
+        // The ordering join's placeholder comes first in the statement.
+        if let ListOrder::Playlist { label_id } = order {
+            q = q.bind(label_id);
+        }
         for t in active {
             q = q.bind(*t);
         }

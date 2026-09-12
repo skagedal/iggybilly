@@ -79,6 +79,61 @@ async fn labels_response(state: &AppState, clip_id: i64) -> AppResult<Response> 
     Ok(Json(labels).into_response())
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Playlist {
+    label_id: i64,
+    label_name: String,
+    /// Summed over the clips whose duration is known; the app counts the
+    /// unknown ones off the list itself.
+    total_seconds: f64,
+    clips: Vec<super::clips::Clip>,
+}
+
+/// GET /api/v1/labels/{id}/playlist — the label's clips in playlist
+/// order, in the shape `/api/v1/clips` already sends them.
+///
+/// A route of its own rather than a mode of `/api/v1/clips`: making that
+/// answer an object instead of an array when it happens to be given one
+/// label would break every installed app the moment the server rolled.
+pub async fn playlist(
+    State(state): State<AppState>,
+    ApiUser { user, .. }: ApiUser,
+    Path(label_id): Path<i64>,
+) -> AppResult<Response> {
+    let name = label_name(&state, label_id).await?;
+    let rows = queries::clips::list(
+        &state.pool,
+        &[name.as_str()],
+        queries::clips::ListOrder::Playlist { label_id },
+    )
+    .await?;
+    let total_seconds: f64 = rows.iter().filter_map(|c| c.duration_seconds).sum();
+    Ok(Json(Playlist {
+        label_id,
+        label_name: name,
+        total_seconds,
+        clips: rows
+            .into_iter()
+            .map(|c| super::clips::clip(c, user.id))
+            .collect(),
+    })
+    .into_response())
+}
+
+/// POST /api/v1/labels/{id}/order — move a clip within the playlist.
+/// The move itself is the web's `set_order`, so both surfaces order a
+/// playlist the same way and refuse the same requests.
+pub async fn order(
+    State(state): State<AppState>,
+    _user: ApiUser,
+    Path(label_id): Path<i64>,
+    Json(req): Json<crate::handlers::labels::OrderRequest>,
+) -> AppResult<Response> {
+    let order = crate::handlers::labels::set_order(&state, label_id, &req).await?;
+    Ok(Json(order).into_response())
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchQuery {

@@ -2,9 +2,14 @@
 
 use sqlx::SqlitePool;
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 
 use super::clips::Label;
+
+/// The gap left between neighbouring positions in a playlist, so a clip
+/// dropped between two rows takes their midpoint and only its own row is
+/// written. See `migrations/0005_playlist_order.sql`.
+const GAP: i64 = 1024;
 
 /// Lower-kebab-case validator. Allows any Unicode lowercase letter (so
 /// å, ä, é, ü, ñ all work), ASCII digits, and hyphens. No leading,
@@ -62,6 +67,9 @@ pub async fn find_by_name(pool: &SqlitePool, name: &str) -> AppResult<Option<Lab
 /// Put a label on a clip, creating the label if this is its first use.
 /// Both steps are INSERT OR IGNORE inside one transaction, so adding a
 /// label that is already there is a no-op rather than an error.
+///
+/// The clip lands at the end of the label's playlist: one gap past the
+/// last position, or at 0 when it is the label's first clip.
 pub async fn add_to_clip(
     pool: &SqlitePool,
     clip_id: i64,
@@ -77,12 +85,19 @@ pub async fn add_to_clip(
         .bind(normalised_name)
         .fetch_one(&mut *tx)
         .await?;
-    sqlx::query("INSERT OR IGNORE INTO clip_labels (clip_id, label_id, added_by) VALUES (?, ?, ?)")
-        .bind(clip_id)
-        .bind(label_id.0)
-        .bind(added_by)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "INSERT OR IGNORE INTO clip_labels (clip_id, label_id, added_by, position)
+         VALUES (?, ?, ?,
+                 (SELECT COALESCE(MAX(position), ?) + ? FROM clip_labels WHERE label_id = ?))",
+    )
+    .bind(clip_id)
+    .bind(label_id.0)
+    .bind(added_by)
+    .bind(-GAP)
+    .bind(GAP)
+    .bind(label_id.0)
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(())
 }
@@ -94,6 +109,117 @@ pub async fn remove_from_clip(pool: &SqlitePool, clip_id: i64, label_id: i64) ->
         .bind(clip_id)
         .bind(label_id)
         .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Move a clip to just after `after_clip_id` in a label's playlist — or
+/// to the front when that is `None` — and return the resulting order.
+///
+/// The move names a neighbour rather than an index on purpose. An index
+/// is a statement about a list that may have changed since the client
+/// read it; a neighbour is a statement about content, and still means
+/// the right thing when someone else has inserted a clip meanwhile.
+///
+/// The common case writes exactly one row, at the midpoint of the gap
+/// the clip was dropped into. Only when that gap is used up — the
+/// neighbours less than two apart, which includes two rows tied by a
+/// race — is the whole label renumbered, in the same transaction.
+pub async fn reorder(
+    pool: &SqlitePool,
+    label_id: i64,
+    clip_id: i64,
+    after_clip_id: Option<i64>,
+) -> AppResult<Vec<i64>> {
+    if after_clip_id == Some(clip_id) {
+        return Err(AppError::BadRequest(
+            "a clip cannot be moved after itself".into(),
+        ));
+    }
+
+    let mut tx = pool.begin().await?;
+    let rows: Vec<(i64, i64)> = sqlx::query_as(
+        "SELECT clip_id, position FROM clip_labels WHERE label_id = ? ORDER BY position, clip_id",
+    )
+    .bind(label_id)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    // A clip the request names but the playlist doesn't hold means the
+    // client is working from a list that no longer exists — worth saying
+    // so, rather than moving something to a place that isn't there.
+    let carries = |id: i64| rows.iter().any(|(c, _)| *c == id);
+    if !carries(clip_id) {
+        return Err(AppError::BadRequest(format!(
+            "clip {clip_id} does not carry this label"
+        )));
+    }
+    if let Some(after) = after_clip_id {
+        if !carries(after) {
+            return Err(AppError::BadRequest(format!(
+                "clip {after} does not carry this label"
+            )));
+        }
+    }
+
+    // The order as it will be: the moved clip lifted out, then put back
+    // where it was dropped.
+    let mut order: Vec<(i64, i64)> = rows
+        .iter()
+        .copied()
+        .filter(|(id, _)| *id != clip_id)
+        .collect();
+    let at = match after_clip_id {
+        Some(after) => {
+            order
+                .iter()
+                .position(|(id, _)| *id == after)
+                .expect("after_clip_id was found above")
+                + 1
+        }
+        None => 0,
+    };
+    let before = at.checked_sub(1).map(|i| order[i].1);
+    let behind = order.get(at).map(|(_, pos)| *pos);
+
+    // Where the moved row goes, or None when the neighbours have no room
+    // between them and the label has to be renumbered.
+    let target = match (before, behind) {
+        (Some(a), Some(b)) if b - a >= 2 => Some(a + (b - a) / 2),
+        (Some(_), Some(_)) => None,
+        (None, Some(b)) => Some(b - GAP),
+        (Some(a), None) => Some(a + GAP),
+        (None, None) => Some(0),
+    };
+
+    match target {
+        Some(pos) => {
+            set_position(&mut tx, label_id, clip_id, pos).await?;
+            order.insert(at, (clip_id, pos));
+        }
+        None => {
+            order.insert(at, (clip_id, 0));
+            for (i, (id, _)) in order.iter().enumerate() {
+                set_position(&mut tx, label_id, *id, i as i64 * GAP).await?;
+            }
+        }
+    }
+    tx.commit().await?;
+
+    Ok(order.into_iter().map(|(id, _)| id).collect())
+}
+
+async fn set_position(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    label_id: i64,
+    clip_id: i64,
+    position: i64,
+) -> AppResult<()> {
+    sqlx::query("UPDATE clip_labels SET position = ? WHERE label_id = ? AND clip_id = ?")
+        .bind(position)
+        .bind(label_id)
+        .bind(clip_id)
+        .execute(&mut **tx)
         .await?;
     Ok(())
 }

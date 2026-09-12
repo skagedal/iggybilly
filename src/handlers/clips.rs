@@ -120,6 +120,21 @@ struct IndexProps {
     /// One wiki page per active filter label that has a label row —
     /// shown above the clips.
     active_wikis: Vec<super::labels::WikiPage>,
+    /// Set only when exactly one label filter is active and that label
+    /// exists; its absence is what the page keys "not a playlist" on.
+    playlist: Option<PlaylistInfo>,
+}
+
+/// The heading above a playlist view, and the marker that this list is
+/// one.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlaylistInfo {
+    label_id: i64,
+    label_name: String,
+    /// Summed over the clips whose duration is known; the page counts
+    /// the unknown ones off the rows itself.
+    total_seconds: f64,
 }
 
 pub async fn list(
@@ -141,11 +156,29 @@ pub async fn list(
     }
 
     let active_strs: Vec<&str> = active.iter().map(|s| s.as_str()).collect();
-    let clips: Vec<ClipRow> = queries::clips::list(&state.pool, &active_strs)
+
+    // A playlist view is a filtered list with exactly one label active,
+    // and that label existing. An intersection of several has no order
+    // to choose between, so it stays reverse chronological.
+    let playlist_label = match active_strs.as_slice() {
+        [name] => queries::labels::find_by_name(&state.pool, name).await?,
+        _ => None,
+    };
+    let order = match &playlist_label {
+        Some(label) => queries::clips::ListOrder::Playlist { label_id: label.id },
+        None => queries::clips::ListOrder::Recent,
+    };
+
+    let clips: Vec<ClipRow> = queries::clips::list(&state.pool, &active_strs, order)
         .await?
         .into_iter()
         .map(|c| clip_row(c, &active_strs))
         .collect();
+    let playlist = playlist_label.map(|label| PlaylistInfo {
+        label_id: label.id,
+        label_name: label.name,
+        total_seconds: clips.iter().filter_map(|c| c.duration_seconds).sum(),
+    });
     let active_wikis = super::labels::active_wikis(&state, &active_strs).await?;
 
     // For each active filter, the X-button link drops just that one label.
@@ -176,6 +209,7 @@ pub async fn list(
             clips,
             active_filters,
             active_wikis,
+            playlist,
         },
     )
 }

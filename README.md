@@ -203,6 +203,42 @@ Environment:
 
 [webhook]: https://support.discord.com/hc/en-us/articles/228383668-Intro-to-Webhooks
 
+## Updating dependencies
+
+`./update` moves the whole tree forward at once — `Cargo.lock`,
+`web/pnpm-lock.yaml`, `mobile/pubspec.lock`, the Flutter SDK pinned in
+`mobile/.fvmrc`, and the actions in `.github/workflows`:
+
+    ./update                 # all of it
+    ./update cargo mobile    # only those parts
+    ./update --dry-run       # print the commands, run none of them
+
+Each part is that ecosystem's own update command; the script is only the
+thing that knows where they all live. The ranges themselves are left
+alone, so `Cargo.toml`, `web/package.json5` and `mobile/pubspec.yaml` are
+never written and crossing a major bound stays a deliberate edit. The two
+things with no lock file are the exception — for the SDK pin and the
+actions the pinned version *is* the range, so those do move across majors.
+
+Actions are pinned to full commit SHAs by [pinact][pinact], with the
+version kept in a trailing comment. A tag can be moved to point at
+different code; a SHA cannot. `dtolnay/rust-toolchain@stable` is exempted
+in `.pinact.yaml`, because that branch defaults the toolchain input to
+stable and every tagged release makes the input required instead.
+
+Two of the ecosystems can wait a few days before taking a newly published
+version, long enough for a compromised one to be noticed, and both are set
+to three days: pnpm through `minimumReleaseAge` in
+`web/pnpm-workspace.yaml`, which guards a plain `pnpm install` too, and
+pinact through `min_age` in `.pinact.yaml`. cargo, pub and fvm have
+nothing equivalent.
+
+[pinact]: https://github.com/suzuki-shunsuke/pinact
+
+Run `git pkgs init` once in the checkout and the script will also finish
+with a package-level summary of what moved; see
+[git-pkgs](https://github.com/git-pkgs/git-pkgs).
+
 ## Admin
 
     iggybilly create-user <username> [--admin]

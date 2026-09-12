@@ -21,6 +21,39 @@ at a local server — `http://10.0.2.2:9020` from the Android emulator,
 `http://localhost:9020` from the iOS simulator — and sign in with a user
 made by `./local/run create-user <name>`.
 
+## On a real phone
+
+`../local/build-to-phone` builds and installs, with no Xcode involved:
+
+    ../local/build-to-phone            # release
+    ../local/build-to-phone --debug
+
+It needs `local/device.env`, which says which phone and which Apple team
+to sign with. That file is gitignored, because this repository is public
+and those values are personal — copy `local/device.env.example`, or
+symlink your own from wherever you keep such things. The team reaches
+Xcode through a generated `ios/Flutter/Signing.xcconfig`, also gitignored,
+which `Debug.xcconfig` and `Release.xcconfig` include optionally so
+simulator builds work without it.
+
+Point the app at your machine, by LAN address or by Bonjour name — both
+work, and `scutil --get LocalHostName` gives you the latter:
+
+    http://192.168.1.20:9020
+    http://your-mac.local:9020
+
+Two things make this work, and both are in `Info.plist`. iOS blocks
+cleartext HTTP, so `NSAllowsLocalNetworking` opens it for local
+destinations only. And iOS asks the user once for local network
+permission, on the app's first request rather than at launch, showing
+`NSLocalNetworkUsageDescription` when it does.
+
+If it still cannot connect right after you grant that permission, quit
+and reopen the app: the grant does not reliably reach a process that is
+already running. Testing the same URL in Safari is not a check on any of
+this — Safari does not use the app's ATS policy, so it will load an
+address the app cannot.
+
 ## Checks
 
     fvm flutter analyze

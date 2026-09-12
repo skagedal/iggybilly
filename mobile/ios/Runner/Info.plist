@@ -26,14 +26,16 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<!-- An app with the audio background mode that is actually producing
-	     audio keeps running with the screen off and the phone in a
-	     pocket. Without this a clip stops the moment you lock the
-	     device. -->
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>audio</string>
-	</array>
+	<!-- Cleartext to local-network addresses only, which is what reaching
+	     a dev server on your own machine needs. Arbitrary cleartext to
+	     the internet stays blocked. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>iggybilly uses the local network to reach an iggybilly server running on it, such as a development server on your own computer.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -57,6 +59,14 @@
 	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<!-- An app with the audio background mode that is actually producing
+	     audio keeps running with the screen off and the phone in a
+	     pocket. Without this a clip stops the moment you lock the
+	     device. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

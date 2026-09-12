@@ -81,22 +81,28 @@ know it. It stops being the thing we keep.
 
 One version of the model at a time, stamped on every stored document.
 
+Node types are named in `kebab-case`, both in the stored JSON and
+wherever they are spelled out elsewhere.
+
 Block nodes: `paragraph`, `heading` (levels 1 to 6), `list` (ordered or
-not, with a start number), `listItem`, `codeBlock` (with an optional
-language), `blockQuote`, `table` (with an alignment per column),
-`thematicBreak`.
+not, with a start number), `list-item`, `code-block` (with an optional
+language), `block-quote`, `thematic-break`.
 
 Inline nodes: `text`, `emphasis`, `strong`, `strikethrough`, `code`,
-`link` (to a URL), `wikiLink` (to a label), `lineBreak`.
+`link` (to a URL), `wiki-link` (to a label), `line-break`.
 
-`wikiLink` is worth its own node rather than being a `link` with a
+`wiki-link` is worth its own node rather than being a `link` with a
 rewritten target, which is what 001 does. A wiki link points at a label,
 not at a URL, and the URL is a rendering of that. Keeping the label means
 the phone can route to its own screen instead of following a web path,
 and that renaming a label could one day fix its inbound links.
 
-Not in the model: raw HTML in any form, images, footnotes, task lists,
-headings deeper than six, autolinked bare text. Raw HTML is excluded on
+Not in the model: raw HTML in any form, images, tables, footnotes, task
+lists, headings deeper than six, autolinked bare text. Tables are out
+because they are hard to render well on a phone and nothing a page about a
+song needs is tabular. Where the model grows, it should grow towards
+nodes that mean something here — lyrics, chords — rather than towards
+more of Markdown; that is a follow-up issue, not this spec. Raw HTML is excluded on
 the same grounds 001 excluded it, and now it is excluded by the shape of
 the storage rather than by a flag on a renderer.
 
@@ -126,8 +132,9 @@ JSONB stays available if this is ever wrong. `json(document)` and
 `jsonb(document)` convert in place, and nothing above the storage layer
 would change.
 
-Nodes are tagged by a `type` field, serde-derived, with children under
-`children` and no positional arrays:
+Nodes are tagged by a `type` field, serde-derived with
+`rename_all = "kebab-case"`, with children under `children` and no
+positional arrays:
 
 ```jsonc
 {
@@ -137,7 +144,7 @@ Nodes are tagged by a `type` field, serde-derived, with children under
       "children": [{ "type": "text", "value": "Bridge" }] },
     { "type": "paragraph", "children": [
       { "type": "text", "value": "Second take is the one, see " },
-      { "type": "wikiLink", "label": "bridge-take-3", "text": null },
+      { "type": "wiki-link", "label": "bridge-take-3", "text": null },
       { "type": "text", "value": "." }
     ]}
   ]
@@ -151,9 +158,10 @@ renderer.
 
 ### Database
 
-A new migration adds two columns to `label_wiki_revisions` and backfills
-them. Revisions are immutable and always have been, so this is the only
-time any stored document is produced from source.
+A new migration adds two columns to `label_wiki_revisions`, and a
+backfill fills them. Revisions are immutable and always have been, so
+the backfill is the only time a stored document is produced from source
+other than at the moment of saving.
 
 ```sql
 -- The authoritative form of a page is the parsed document, not the
@@ -173,16 +181,33 @@ ALTER TABLE label_wiki_revisions ADD COLUMN parser TEXT;
 ```
 
 Both are nullable because SQLite cannot add a `NOT NULL` column without a
-default, and a default here would be a lie. The backfill fills every
-existing row; a null afterwards is a bug and the loader treats it as one,
-falling back to parsing `content` and logging at WARN rather than
-serving a broken page.
+default, and a default here would be a lie.
 
-The backfill runs in Rust, not in SQL: it is a parse per revision, over
-a table with tens of rows. It belongs in `src/cli.rs` as a subcommand the
-deploy runs once, in the manner of the existing CLI commands, rather than
-in the migration, because a migration that needs the application's own
-parser is a migration you cannot run from a shell.
+The backfill runs in Rust, not in SQL: it is a parse per revision, and a
+migration that needs the application's own parser is not something SQL
+can express. `sqlx::migrate!` has no hook for running code alongside a
+migration — its migrations are SQL files and nothing else — but it does
+not need one. `db::connect` already runs the migrations on every start,
+so the backfill goes directly after that call:
+
+```rust
+sqlx::migrate!("./migrations").run(&pool).await?;
+document::backfill(&pool).await?;
+```
+
+`backfill` selects the revisions whose `document` is null, parses each
+and writes the result. It is idempotent by construction: once every row
+is filled, the select returns nothing and the call costs one query. There
+is no manual step after merging, and no deploy that can forget one; a
+database restored from an old backup is filled the first time the server
+opens it.
+
+A revision whose source does not fit the model — a table, an image, raw
+HTML written before this change — cannot be parsed, and the backfill must
+not refuse to start the server over it. It leaves that row's `document`
+null and logs the revision at WARN. The loader, finding a null, serves the
+source as a single `code-block`, so the page is readable and visibly
+unconverted, and the next save of that page, which must parse, fixes it.
 
 ### Rust
 
@@ -199,7 +224,9 @@ what surfaces to the author as "unsupported syntax" rather than being
 dropped. That includes raw HTML, so the safety property 001 got from
 `unsafe_ = false` now comes from the model having no node that can hold
 markup. Link targets are still scheme-checked, because a `link` node can
-hold any string.
+hold any string. comrak's table extension stays on even though the model
+has no table: with it off, a table would parse as a paragraph of pipes
+and slip through, rather than being recognised and refused.
 
 `to_html` replaces `markdown::render` for pages. `src/markdown.rs` is
 reduced to the comrak call and the AST walk, or absorbed into
@@ -288,6 +315,3 @@ this document and needs rewriting when it is picked up.
   strategy. A real answer is a model migration that rewrites stored
   documents, and the first time the model version moves is when that gets
   designed.
-- **Tables.** They are in the model because comrak has them enabled today
-  and a page may already use one. Rendering a table on a phone is
-  unpleasant. Keeping them may be the wrong call.

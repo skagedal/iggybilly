@@ -7,8 +7,8 @@ The issue asks whether to replace `xcrun altool` in
 `ci/upload-to-testflight` with [`asc`](https://asccli.sh), and the title
 says *evaluate*, so this document has to reach a verdict before it can
 describe anything. The verdict is: **swap it**, for
-`asc publish testflight`, pinned to an exact version and verified by
-checksum. The argument is in "Why asc" below; everything before that is
+`asc publish testflight`, installed with the author's `setup-asc` action
+at an exact version. The argument is in "Why asc" below; everything before that is
 what a release then does, and everything after it is how.
 
 Read against `asc` 5.2.1, the current release. Everything asserted about
@@ -62,14 +62,19 @@ of the change as far as anyone outside the repository is concerned.
 
 They come from the tag message.
 
-A release is one command, `git tag … && git push origin …`, and the tag is
-already the only place the version is written. Making it the place the
-notes are written too keeps that property: there is still nothing to
-commit before releasing, and still one thing to get right. The command
-grows a flag:
+The tag is already the only place the version is written. Making it the
+place the notes are written too keeps that property: there is still
+nothing to commit before releasing, and still one thing to get right.
 
-    git tag -a mobile-0.2.0 -m "Repeat is gapless now. Try a two-bar riff."
-    git push origin mobile-0.2.0
+A release becomes one command, `local/release`, which works out the next
+version itself and writes the message into an annotated tag:
+
+    ./local/release "Repeat is gapless now. Try a two-bar riff."
+    ./local/release minor "Playlists."
+
+It is described under "Implementation". Tagging by hand keeps working;
+the script exists so that the version arithmetic and the `-a` are not
+things to get right.
 
 The alternatives are worse for this repository rather than worse in
 general. A `CHANGELOG.md` is a file that must be edited and committed
@@ -214,16 +219,24 @@ retry command with the original text.
 
 ### Install cost
 
-One download and a `chmod`. The macOS arm64 binary for 5.2.1 is about 53
+One download. The macOS arm64 binary for 5.2.1 is about 53
 MB, published as a release asset next to a checksums file, with no
 runtime to install underneath it. Against a job that already spends
 several minutes in `flutter build ipa`, it does not register.
 
-Two ways of getting it are wrong here. `brew install asc` works but pulls
-a Homebrew update first, which is minutes rather than seconds. The
-author's `setup-asc` action works too, but it is a second third-party
-dependency in the release path to pin and to trust, and it buys nothing
-over `curl`.
+It is installed with the author's action,
+[`rudrankriyam/setup-asc`](https://github.com/rudrankriyam/setup-asc).
+Given an exact `version`, it downloads that release asset, verifies it
+against the release's SHA-256 checksums file, caches it, and puts `asc`
+on the `PATH`. That is exactly the half-dozen lines of `curl`, `grep`
+and `shasum` the script would otherwise carry, and it keeps them out of
+the script. The action is a second third-party dependency in the release
+path, but it is by the tool's author, it is a composite action whose whole
+source is one readable `action.yml`, and it is pinned to a commit SHA
+like every other action here.
+
+`brew install asc` is the way that is wrong: it pulls a Homebrew update
+first, which is minutes rather than seconds.
 
 ### What it costs
 
@@ -232,8 +245,9 @@ things follow, and only the first needs a decision.
 
 The release cadence is fast — 5.0.0, 5.1.0, 5.2.0 and 5.2.1 all inside a
 week. Tracking `latest` in CI would mean a release path that changes
-under you between tags, so the version is pinned and the download is
-checked against the published SHA-256. This matches how the repository
+under you between tags, so the version is pinned in the `setup-asc` step
+and the action checks the download against the published SHA-256. The
+action itself is pinned to a commit. This matches how the repository
 already treats Actions (`.pinact.yaml`) and pnpm packages
 (`minimumReleaseAge`): pin, verify, and upgrade deliberately.
 
@@ -270,7 +284,8 @@ tool is on the runner there is no reason to keep two uploaders.
 
 ## Implementation
 
-One script and one workflow step, as the issue says.
+One script and one workflow step, as the issue says, and a second script
+for cutting a release.
 
 ### `ci/upload-to-testflight`
 
@@ -287,16 +302,11 @@ Constants at the top, next to each other, in the style
 
     bundle_id="tech.skagedal.iggybilly"
     group="iggybilly testers"
-    asc_version="5.2.1"
 
-Installing `asc`, against the pinned version:
-
-    asset="asc_${asc_version}_macOS_$(uname -m | sed 's/^x86_64$/amd64/')"
-    base="https://github.com/rorkai/App-Store-Connect-CLI/releases/download/$asc_version"
-    curl -fsSL "$base/$asset" -o "$RUNNER_TEMP/asc"
-    curl -fsSL "$base/asc_${asc_version}_checksums.txt" -o "$RUNNER_TEMP/checksums"
-    (cd "$RUNNER_TEMP" && grep " $asset\$" checksums | sed "s/$asset/asc/" | shasum -a 256 -c -)
-    chmod +x "$RUNNER_TEMP/asc"
+`asc` is on the `PATH` by the time the script runs, put there by the
+workflow; the script checks for it and says which step should have
+installed it if it is missing, rather than failing on a bare
+"command not found".
 
 The notes, from the tag message with the commit subjects as the floor.
 `git tag -l --format='%(contents)'` is empty for a lightweight tag and
@@ -335,7 +345,7 @@ none, since `--test-notes ""` is not the same as not passing it:
     ASC_ISSUER_ID="$APP_STORE_CONNECT_ISSUER_ID" \
     ASC_PRIVATE_KEY="$APP_STORE_CONNECT_PRIVATE_KEY" \
     ASC_TELEMETRY_DISABLED=1 \
-        "$RUNNER_TEMP/asc" "${arguments[@]}"
+        asc "${arguments[@]}"
 
 `ASC_PROFILE`, `ASC_BYPASS_KEYCHAIN` and `ASC_CONFIG_PATH` are left
 unset, which is what selects the environment-only path. `--submit
@@ -345,15 +355,53 @@ and necessary on the first of each version.
 
 ### The workflow
 
-`.github/workflows/release.yml`, the iOS job. Two changes.
+`.github/workflows/release.yml`, the iOS job. Three changes.
 
 The checkout gains `fetch-depth: 0`. The default shallow fetch has no
 tags and no history, so neither the tag message nor the previous tag is
 readable without it. The repository is small enough that this is not
 worth optimising.
 
+A step before the upload installs `asc`:
+
+    - name: Install asc
+      uses: rudrankriyam/setup-asc@5358c70a27a3f0d1517604b0f1fdc43e70c1cc4d # v1.0.1
+      with:
+        version: 5.2.1
+
 The upload step keeps its three secrets and its name. It gains nothing
-else; everything above lives in the script.
+else; everything else lives in the script.
+
+### `local/release`
+
+A script for cutting a release, next to `local/build-to-phone` and in its
+style:
+
+    ./local/release [major|minor|patch] <message>
+
+The bump defaults to `patch`. The message is required: it is what testers
+read, and a release script that let you skip it would be undoing the
+point of the tag message. The fallback in `ci/upload-to-testflight`
+remains for tags made by hand.
+
+It refuses, before doing anything, unless:
+
+- the current branch is `main`,
+- the working tree is clean, and
+- `main` is the same commit as `origin/main` after a fetch, so the tag
+  names a commit that CI has seen and everyone else has.
+
+It then lists the `mobile-*` tags, keeps those that parse as one to three
+integers — the same rule the workflow enforces — treats missing parts as
+zero, and takes the highest by semver. No tags at all is `0.0.0`. The
+bump is applied the usual way (minor resets patch, major resets both),
+and the new tag is always written with three parts. The existing
+`mobile-0.1.2` makes the next patch `mobile-0.1.3`.
+
+It prints the version it is about to tag and the message, creates the
+annotated tag on `HEAD`, and pushes that one tag. Pushing is what starts
+the release, so it asks for confirmation first, and `--yes` skips the
+question.
 
 ### One-time setup
 
@@ -362,8 +410,9 @@ must be done by hand because App Store Connect has no API for them. This
 adds a third, of the same kind: create the external group
 `iggybilly testers` and put the band in it. It is one screen, once.
 
-The same file's "Releasing" section gains the `-a` in its example tag
-command, and a sentence saying the message becomes what testers read.
+The same file's "Releasing" section, and the comment at the top of
+`release.yml`, show `./local/release` instead of the bare `git tag`
+command, with a sentence saying the message becomes what testers read.
 
 ### What does not change
 
@@ -410,14 +459,21 @@ issue; not worth smuggling into this one.
   cut shorter than it needs to be. Nobody will write 4000 characters of
   release notes for a band's app, and the alternative is arithmetic in
   bash.
+- **The action downloads from the CLI's old repository name.** The CLI
+  moved from `rudrankriyam/App-Store-Connect-CLI` to
+  `rorkai/App-Store-Connect-CLI`, and `setup-asc` v1.0.1 still builds its
+  download URLs against the old name, relying on GitHub's redirect. That
+  works today and the checksum still guards what arrives, but a redirect
+  is not a promise. If it breaks, the fallback is the few lines of `curl`
+  the action replaced.
 - **Whether the group name belongs in a repository variable.** It is
   hardcoded here, matching `bundle_id` in `ci/setup-ios-signing` and
   `profile_name` in `local/make-ios-signing`. A variable would be one
   more thing that must be set before a release does anything, and
   `IOS_RELEASE` is already that.
-- **Whether pinning 5.2.1 will age badly.** A pinned version in a script
-  is upgraded by a human noticing, and nobody is watching a release
-  script between releases. Dependabot does not cover a `curl` in a bash
-  script. The likely outcome is that it stays on 5.2.1 until something
+- **Whether pinning 5.2.1 will age badly.** The action's SHA is kept
+  current by the tooling that already watches actions, but the `version`
+  input is a string it does not understand, and is upgraded by a human
+  noticing. Nobody is watching a release workflow between releases. The likely outcome is that it stays on 5.2.1 until something
   breaks, which is acceptable and should be admitted rather than
   designed around.

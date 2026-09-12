@@ -1,0 +1,20 @@
+# Actions are pinned to full commit SHAs, with the version in a trailing
+# comment: a tag can be moved to point at different code, a SHA cannot.
+#
+# min_age holds a release back for three days so a compromised one has time
+# to be noticed — the same wait web/pnpm-workspace.yaml asks pnpm for.
+# always: true checks what is already pinned, not only what an update brings.
+version: 3
+min_age:
+  value: 3
+  always: true
+
+rules:
+  # dtolnay/rust-toolchain@stable is a branch whose action.yml defaults the
+  # toolchain input to stable. Every tagged release makes that input
+  # required instead, so pinning this one to a tag breaks the step rather
+  # than securing it.
+  - ignore: true
+    conditions:
+      - expr: |
+          ActionName == "dtolnay/rust-toolchain" && ActionVersion == "stable"

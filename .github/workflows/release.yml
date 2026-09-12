@@ -1,0 +1,132 @@
+name: Release the app
+
+# Pushing a version tag ships both phone apps from the same commit:
+# Android as an APK on the tag's GitHub release, iOS to TestFlight.
+#
+#   git tag v0.2.0 && git push origin v0.2.0
+#
+# The tag is the only place the version is written. pubspec.yaml's
+# version is what a local build gets and nothing more; the build name and
+# build number below come from the tag and the run, so releasing needs no
+# commit of its own.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  version:
+    name: Work out the version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.derive.outputs.version }}
+      build: ${{ steps.derive.outputs.build }}
+    steps:
+      - name: Derive the version and build number from the tag
+        id: derive
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+
+          # App Store Connect takes one to three integers and nothing
+          # else, so v1.2.0-rc1 would fail -- but only after a build long
+          # enough to have forgotten about. Fail here instead.
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+(\.[0-9]+){0,2}$'; then
+            echo "::error::the tag $GITHUB_REF_NAME does not name a version. Expected something like v1.2.3."
+            exit 1
+          fi
+
+          # TestFlight refuses a build number it has already seen, and a
+          # re-run keeps the run number it failed under -- so fold the
+          # attempt in. Still only ever increases, which is the rule that
+          # matters on both platforms.
+          build="$(( GITHUB_RUN_NUMBER * 10 + GITHUB_RUN_ATTEMPT ))"
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+          echo "Releasing $version as build $build" >> "$GITHUB_STEP_SUMMARY"
+
+          # Said on the release itself rather than left to be noticed, so
+          # that a half-set-up pipeline cannot quietly ship one platform
+          # for months.
+          if [ "$IOS_RELEASE" != enabled ]; then
+            echo "The iOS job is off: set the IOS_RELEASE repository variable to 'enabled' once the Apple secrets are in place." >> "$GITHUB_STEP_SUMMARY"
+          fi
+        env:
+          IOS_RELEASE: ${{ vars.IOS_RELEASE }}
+
+  android:
+    name: Publish the Android APK
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      BUILD: ${{ needs.version.outputs.build }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version-file: mobile/.fvmrc
+          cache: true
+      - name: Make ci scripts executable
+        run: chmod +x ci/*
+      - name: Set up signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: ./ci/setup-android-signing
+      - name: Install dependencies
+        run: flutter pub get
+        working-directory: mobile
+      - name: Build the APK
+        run: flutter build apk --release --build-name="$VERSION" --build-number="$BUILD"
+        working-directory: mobile
+      - name: Attach it to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./ci/publish-apk
+
+  ios:
+    name: Send the iOS build to TestFlight
+    needs: version
+    # Off until the Apple secrets exist, so that releasing Android does
+    # not have to look like a failure in the meantime. Turn it on with
+    # `gh variable set IOS_RELEASE --body enabled`.
+    if: ${{ vars.IOS_RELEASE == 'enabled' }}
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      BUILD: ${{ needs.version.outputs.build }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version-file: mobile/.fvmrc
+          cache: true
+      - name: Make ci scripts executable
+        run: chmod +x ci/*
+      - name: Set up signing
+        env:
+          IOS_DIST_CERT_P12_BASE64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
+          IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          IOS_TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+        run: ./ci/setup-ios-signing
+      - name: Install dependencies
+        run: flutter pub get
+        working-directory: mobile
+      # IGGYBILLY_EXPORT_OPTIONS is where setup-ios-signing left the
+      # export options it generated, which carry the team id.
+      - name: Build the ipa
+        run: |
+          flutter build ipa --release \
+            --build-name="$VERSION" \
+            --build-number="$BUILD" \
+            --export-options-plist="$IGGYBILLY_EXPORT_OPTIONS"
+        working-directory: mobile
+      - name: Upload to TestFlight
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: ./ci/upload-to-testflight

@@ -137,6 +137,117 @@ already running. Testing the same URL in Safari is not a check on any of
 this — Safari does not use the app's ATS policy, so it will load an
 address the app cannot.
 
+## Releasing
+
+Push a version tag and both apps ship from that commit:
+
+    git tag v0.2.0 && git push origin v0.2.0
+
+`.github/workflows/release.yml` builds the Android APK and attaches it to
+the tag's GitHub release, where anyone can download it without an account
+or an app store, and builds the iOS app and uploads it to TestFlight.
+
+The tag is the only place the version is written. `--build-name` comes
+from the tag and `--build-number` from the run, so a release needs no
+commit of its own and `pubspec.yaml`'s version is only what a local build
+gets. A tag must be `v` and one to three integers: the workflow refuses
+anything else up front, because App Store Connect would refuse it at the
+end of a long build.
+
+The two jobs are independent, so the APK is published even when the Apple
+side fails, and the other way round.
+
+### Setting up the Android key
+
+Once, on your machine:
+
+    ../local/make-release-keystore
+
+It writes a keystore outside the repository and a gitignored
+`android/key.properties` pointing at it, and prints the two commands that
+give CI the same key. Back the keystore up before anything else. Android
+knows an app by its signature, so if that file is lost, every friend who
+has the app has to delete it before they can install another build — and
+the copy in `key.properties` is the only other one.
+
+Nothing else needs an account: there is no Play Console in this, and no
+fee. Your friends allow installs from their browser once, tap the APK on
+the release page, and that is the whole flow. What they do not get is
+automatic updates, so a new release is a link you send them.
+
+### Setting up the Apple side
+
+Once, and none of it is quick the first time. It needs the Apple
+Developer Program, which is the yearly fee; there is no free path onto
+someone else's iPhone that they would thank you for.
+
+1. Register the bundle id `tech.skagedal.iggybilly` on the developer
+   portal, and create the matching app record in App Store Connect. The
+   upload has nowhere to land until that record exists.
+2. Make an **Apple Distribution** certificate, in Xcode under Settings →
+   Accounts → Manage Certificates, and export it from Keychain Access as
+   a `.p12` with a password. Both halves become secrets below.
+3. Make an **App Store** provisioning profile for that bundle id against
+   that certificate, and download the `.mobileprovision`. Its name is
+   read out of the file itself by `ci/setup-ios-signing`, so it is not
+   another thing to keep in step.
+4. Make an App Store Connect API key with the App Manager role, under
+   Users and Access → Integrations. The `.p8` downloads once and never
+   again.
+
+That is nine repository secrets in all, counting the two the keystore
+script printed commands for. None should be pasted anywhere they can be
+scrolled back to:
+
+| Secret | What it is |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | the keystore, base64 |
+| `ANDROID_KEYSTORE_PASSWORD` | its password |
+| `IOS_DIST_CERT_P12_BASE64` | the distribution certificate, base64 |
+| `IOS_DIST_CERT_PASSWORD` | the password you exported it under |
+| `IOS_PROVISIONING_PROFILE_BASE64` | the App Store profile, base64 |
+| `IOS_TEAM_ID` | the team id, the `IOS_TEAM` in `local/devices.env` |
+| `APP_STORE_CONNECT_KEY_ID` | the API key's id |
+| `APP_STORE_CONNECT_ISSUER_ID` | the issuer id shown above the key list |
+| `APP_STORE_CONNECT_PRIVATE_KEY` | the contents of the `.p8` |
+
+    base64 < distribution.p12 | gh secret set IOS_DIST_CERT_P12_BASE64
+    base64 < iggybilly.mobileprovision | gh secret set IOS_PROVISIONING_PROFILE_BASE64
+    gh secret set APP_STORE_CONNECT_PRIVATE_KEY < AuthKey_XXXXXXXXXX.p8
+
+The iOS job does not run until it is switched on, so that shipping
+Android before any of this exists is a green release rather than half a
+red one:
+
+    gh variable set IOS_RELEASE --body enabled
+
+Until then every release page says so, which is the point: a half-built
+pipeline that quietly ships one platform is worse than one that fails.
+
+Xcode signs in one of two modes, and this app uses a different one in
+each place. On your machine it is *automatic*: Xcode talks to Apple as
+the Apple ID you are logged in as, and makes or renews whatever
+certificate and profile a build turns out to need. A runner has nobody
+logged in, so there it is *manual*: it is handed one certificate and one
+profile and told to use exactly those. `ci/setup-ios-signing` switches
+the mode by writing the same gitignored `ios/Flutter/Signing.xcconfig`
+that `../local/build-to-phone` writes, with the identity and the profile
+named alongside the team. Nothing about building to your own phone
+changes.
+
+### Getting it to your friends
+
+In TestFlight, an **internal** tester is someone you have added to the
+App Store Connect account, and their builds are available as soon as
+processing finishes, with no review at all. An **external** group is
+anyone with the public link, and the first build of each version goes
+through a beta review, which is a fraction of App Store review and
+usually same-day. Later builds of that version skip it.
+
+Either way they install TestFlight, tap a link, and get every build after
+that automatically. A build expires ninety days after upload, so a tag
+every few months is the cost of them keeping the app.
+
 ## Checks
 
     fvm flutter analyze

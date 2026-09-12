@@ -2,6 +2,11 @@
 
 Status: **accepted**, and in production since `migrations/0003_label_wiki.sql`.
 
+> Complemented by `drafts/structured-document-storage.md`, which revisits
+> the decision recorded below under "The source is Markdown, and stays
+> Markdown". That section stands as it was written. Read the later spec
+> for what replaces it and why.
+
 Shipped before this directory existed, and written down afterwards from
 the code. It is here because a later spec argues from it — the comments
 draft takes its storage decision from this one — and an argument that

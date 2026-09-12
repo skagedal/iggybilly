@@ -91,7 +91,10 @@ class PlayerController extends ChangeNotifier {
     try {
       final reported = await _engine.load(url, headers: headers);
       if (reported != null) _duration = reported;
-      await _engine.play();
+      // Not awaited: play() completes when playback *finishes*, not when
+      // it starts. Awaiting it would park the rest of this method until
+      // the clip ends.
+      unawaited(_engine.play());
     } catch (e) {
       // A clip whose file is missing or in a format the device cannot
       // decode. Unload it: a bar showing a clip that will not play is
@@ -109,7 +112,7 @@ class PlayerController extends ChangeNotifier {
     if (_isPlaying) {
       await _engine.pause();
     } else {
-      await _engine.play();
+      unawaited(_engine.play());
     }
   }
 

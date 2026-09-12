@@ -126,10 +126,15 @@ void main() {
   test('pressing play on the loaded clip toggles instead of reloading', () async {
     final clip = clipFixture();
     final url = Uri.parse('https://example.test/clips/1/audio');
+
+    // Whether sound is coming out is reported by the engine's stream, not
+    // returned by the call, so each step waits for that to be delivered.
     await player.play(clip, url);
+    await pumpEventQueue();
     expect(player.isPlaying, isTrue);
 
     await player.play(clip, url);
+    await pumpEventQueue();
 
     // The position is what would be lost by reloading, which is why this
     // rule exists at all.
@@ -138,6 +143,7 @@ void main() {
     expect(player.isPlaying, isFalse);
 
     await player.play(clip, url);
+    await pumpEventQueue();
     expect(player.isPlaying, isTrue);
     expect(engine.loaded.length, 1);
   });

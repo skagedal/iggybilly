@@ -5,6 +5,13 @@
 // generated. Nothing here is executed by Node's own resolver: build.mjs
 // is ESM by its extension, and the sources under src/ are bundled by
 // esbuild rather than imported at runtime.
+//
+// Every dependency is "latest". pnpm-lock.yaml is what pins the versions
+// actually installed, and minimumReleaseAge in pnpm-workspace.yaml is
+// what keeps a fresh publish from being one of them; a hand-written
+// caret adds nothing to either and goes stale the moment the lock file
+// moves past it. Updating is `./update web`, and reading the diff is how
+// a major shows up.
 {
   name: "iggybilly-web",
   private: true,
@@ -20,25 +27,32 @@
     "check": "pnpm run typecheck && pnpm run lint"
   },
   dependencies: {
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
-    "wavesurfer.js": "^7.9.0"
+    "react": "latest",
+    "react-dom": "latest",
+    "wavesurfer.js": "latest"
   },
   devDependencies: {
     // Stands in for eslint-plugin-react, which caps its eslint peer at 9 and
     // has not shipped since April 2025. Rule names and presets differ; the
     // config is written against this one, not ported.
     // https://github.com/jsx-eslint/eslint-plugin-react/issues/3977
-    "@eslint-react/eslint-plugin": "^5",
-    "@eslint/js": "^10",
-    "@types/react": "^19.1.0",
-    "@types/react-dom": "^19.1.0",
-    "esbuild": "^0.25.0",
-    "eslint": "^10",
-    "eslint-plugin-react-hooks": "^7.0.0",
-    "globals": "^16.0.0",
-    "typescript": "^5.8.0",
-    "typescript-eslint": "^8.0.0"
+    "@eslint-react/eslint-plugin": "latest",
+    "@eslint/js": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "esbuild": "latest",
+    "eslint": "latest",
+    "eslint-plugin-react-hooks": "latest",
+    "globals": "latest",
+    // The one held back. typescript-eslint 8 refuses to load against the
+    // TypeScript 7 compiler API and says so on every lint run; 6.0 is
+    // still only a beta, so 5 is where this can sit. Drop the range once
+    // typescript-eslint ships TS 7 support.
+    // https://github.com/typescript-eslint/typescript-eslint/issues/10940
+    "typescript": "^5",
+    "typescript-eslint": "latest"
   },
+  // The exception: an exact pin, because this one says which pnpm runs
+  // rather than what it installs, and corepack verifies it.
   packageManager: "pnpm@10.33.0"
 }

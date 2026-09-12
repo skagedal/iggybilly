@@ -6,10 +6,12 @@
 #   ./update cargo mobile    # only those parts
 #   ./update --dry-run       # print the commands, run none of them
 #
-# Version ranges stay where a human put them: Cargo.toml, web/package.json5
-# and mobile/pubspec.yaml are never written, and their lock files move
-# underneath them. Crossing a major bound is therefore still a manual edit
-# of a manifest, which is the point of writing ranges by hand.
+# No manifest is written here. Cargo.toml and mobile/pubspec.yaml carry
+# ranges a human put there, so their lock files move underneath them and
+# crossing a major bound stays a manual edit, which is the point of writing
+# a range by hand. web/package.json5 says "latest" throughout: there the
+# lock file is the whole pin, pnpm is free to cross a major, and the diff
+# below is where you find out that it did.
 #
 # The two things with no lock file of their own are edited in place: the
 # Flutter SDK pin in mobile/.fvmrc, and the actions in .github/workflows.
@@ -40,7 +42,7 @@ usage: ./update [options] [part ...]
 
 Parts (default: all, in this order):
   cargo     Cargo.lock, within the ranges in Cargo.toml
-  web       web/pnpm-lock.yaml, within the ranges in web/package.json5
+  web       web/pnpm-lock.yaml, the only pin web/package.json5 has
   flutter   the SDK pinned in mobile/.fvmrc
   mobile    mobile/pubspec.lock, within the ranges in mobile/pubspec.yaml
   actions   the action tags in .github/workflows
@@ -123,9 +125,10 @@ update-cargo() {
 update-web() {
     heading "npm packages (web/pnpm-lock.yaml)"
     require pnpm
-    # No --latest: the caret ranges in package.json5 are the range, and
-    # --no-save keeps pnpm from rewriting them. The release-age floor comes
-    # from pnpm-workspace.yaml, so it applies here without being asked for.
+    # --no-save because there is nothing worth saving: package.json5 asks
+    # for "latest" everywhere, so this rewrites the lock file and leaves the
+    # manifest alone. The release-age floor comes from pnpm-workspace.yaml,
+    # so it applies here without being asked for.
     ( cd "$ROOT/web" && run pnpm update --no-save )
 }
 

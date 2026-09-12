@@ -1,7 +1,7 @@
 import {
   createContext,
+  use,
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -94,7 +94,7 @@ interface PlayerContextValue {
 const PlayerContext = createContext<PlayerContextValue | null>(null);
 
 export function usePlayer(): PlayerContextValue {
-  const ctx = useContext(PlayerContext);
+  const ctx = use(PlayerContext);
   if (!ctx) throw new Error("usePlayer must be used inside <PlayerProvider>");
   return ctx;
 }
@@ -112,9 +112,15 @@ function storedRepeat(): boolean {
 
 export function PlayerProvider({ children }: { children: ReactNode }) {
   const [track, setTrack] = useState<Track | null>(null);
-  const [isPlaying, setPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [repeat, setRepeatState] = useState(storedRepeat);
+  const [isPlaying, setIsPlaying] = useState(false);
+  // The position is stored together with the clip it was measured in, so
+  // loading another clip reads as 0 without an effect having to reset it.
+  const [played, setPlayed] = useState<{
+    clipId: number | null;
+    seconds: number;
+  }>({ clipId: null, seconds: 0 });
+  const currentTime = played.clipId === track?.clipId ? played.seconds : 0;
+  const [repeat, setRepeat] = useState(storedRepeat);
   // Whether the detailed pane is up. Local to the provider rather than in
   // the context: only the bar opens it and only the pane closes it.
   const [expanded, setExpanded] = useState(false);
@@ -172,17 +178,18 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       });
     }
 
-    ws.on("timeupdate", setCurrentTime);
-    ws.on("play", () => setPlaying(true));
-    ws.on("pause", () => setPlaying(false));
-    ws.on("finish", () => setPlaying(false));
+    ws.on("timeupdate", (seconds) =>
+      setPlayed({ clipId: track.clipId, seconds }),
+    );
+    ws.on("play", () => setIsPlaying(true));
+    ws.on("pause", () => setIsPlaying(false));
+    ws.on("finish", () => setIsPlaying(false));
 
     waveSurferRef.current = ws;
-    setCurrentTime(0);
 
     return () => {
       waveSurferRef.current = null;
-      setPlaying(false);
+      setIsPlaying(false);
       ws.destroy();
       if (media) {
         media.pause();
@@ -237,8 +244,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     ws.setTime(Math.min(total || target, Math.max(0, target)));
   }, []);
 
-  const setRepeat = useCallback((next: boolean) => {
-    setRepeatState(next);
+  const changeRepeat = useCallback((next: boolean) => {
+    setRepeat(next);
     try {
       window.localStorage.setItem(REPEAT_KEY, next ? "1" : "0");
     } catch {
@@ -251,6 +258,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // for a clip that has just been deleted has nothing to show.
   const stop = useCallback(() => {
     setTrack(null);
+    // Dropping the position too: stopping and then playing the same clip
+    // rebuilds the instance at zero, and a kept position would be read as
+    // still belonging to it until the first timeupdate.
+    setPlayed({ clipId: null, seconds: 0 });
     setExpanded(false);
   }, []);
 
@@ -272,7 +283,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       toggle,
       seek,
       skip,
-      setRepeat,
+      setRepeat: changeRepeat,
       stop,
       rename,
     }),
@@ -286,14 +297,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       toggle,
       seek,
       skip,
-      setRepeat,
+      changeRepeat,
       stop,
       rename,
     ],
   );
 
   return (
-    <PlayerContext.Provider value={value}>
+    <PlayerContext value={value}>
       {children}
       <PlayerBar
         containerRef={containerRef}
@@ -305,7 +316,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           would take the waveform host — the one node that has to outlive
           every change — down with it. */}
       {expanded && <PlayerPane onClose={() => setExpanded(false)} />}
-    </PlayerContext.Provider>
+    </PlayerContext>
   );
 }
 

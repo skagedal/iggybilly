@@ -95,6 +95,9 @@ function Revision({
         <summary>View content</summary>
         <div
           className="wiki-content"
+          // Same as WikiPanel: comrak renders this with `unsafe_` false
+          // (src/markdown.rs), so the HTML carries no raw user markup.
+          // eslint-disable-next-line @eslint-react/dom-no-dangerously-set-innerhtml
           dangerouslySetInnerHTML={{ __html: revision.contentHtml }}
         />
       </details>

@@ -214,11 +214,17 @@ Environment:
     ./update --dry-run       # print the commands, run none of them
 
 Each part is that ecosystem's own update command; the script is only the
-thing that knows where they all live. The ranges themselves are left
-alone, so `Cargo.toml`, `web/package.json5` and `mobile/pubspec.yaml` are
-never written and crossing a major bound stays a deliberate edit. The two
-things with no lock file are the exception — for the SDK pin and the
-actions the pinned version *is* the range, so those do move across majors.
+thing that knows where they all live. No manifest is written by it.
+`Cargo.toml` and `mobile/pubspec.yaml` carry ranges, so their lock files
+move underneath them and crossing a major bound stays a deliberate edit.
+`web/package.json5` asks for `"latest"` instead — there the lock file is
+the whole pin, and pnpm crosses majors on its own. The two things with no
+lock file at all work the same way: for the SDK pin and the actions the
+pinned version *is* the range, so those move across majors too.
+
+The `"latest"` convention is the general one for JS manifests here; see
+`codestyle/dependency-versions.md` in
+[skagedal-tools](https://github.com/skagedal/skagedal-tools).
 
 Actions are pinned to full commit SHAs by [pinact][pinact], with the
 version kept in a trailing comment. A tag can be moved to point at

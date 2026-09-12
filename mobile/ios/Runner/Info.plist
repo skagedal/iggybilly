@@ -40,8 +40,19 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<!-- Neither of these is used. file_picker links against the photo and
+	     camera pickers whatever you ask it for, and App Store Connect
+	     rejects a build that references those APIs without a purpose
+	     string, so the honest string is one that says so. Apple asks for
+	     NSLocationWhenInUseUsageDescription too, but does not require it,
+	     and claiming a use for location we do not have is worse than the
+	     warning. -->
+	<key>NSCameraUsageDescription</key>
+	<string>iggybilly does not use the camera. It is here because the file picker that chooses an audio file to upload can also reach it.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>iggybilly uses the local network to reach an iggybilly server running on it, such as a development server on your own computer.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>iggybilly does not read your photos. It is here because the file picker that chooses an audio file to upload can also reach them.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

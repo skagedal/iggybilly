@@ -166,12 +166,12 @@ Once, on your machine:
 
     ../local/make-release-keystore
 
-It writes a keystore outside the repository and a gitignored
-`android/key.properties` pointing at it, and prints the two commands that
-give CI the same key. Back the keystore up before anything else. Android
-knows an app by its signature, so if that file is lost, every friend who
-has the app has to delete it before they can install another build — and
-the copy in `key.properties` is the only other one.
+It writes a keystore outside the repository, its password beside it, and
+a gitignored `android/key.properties` pointing at both, and prints the
+two commands that give CI the same key. Seal the keystore before anything
+else — `../local/seal-signing-backup`, below. Android knows an app by its
+signature, so if that file is lost, every friend who has the app has to
+delete it before they can install another build.
 
 Nothing else needs an account: there is no Play Console in this, and no
 fee. Your friends allow installs from their browser once, tap the APK on
@@ -205,9 +205,9 @@ a `.p12`, registers the bundle id if it is new, makes the App Store
 provisioning profile, and sets all seven iOS secrets. No Xcode, no
 Keychain Access, no developer portal.
 
-Back up `~/.apple-signing` afterwards, the way you backed up the
-keystore. The private key is in there and nowhere else, and a certificate
-whose private key is gone is a dead letter.
+Seal `~/.apple-signing` afterwards, the way you sealed the keystore — the
+next section. The private key is in there and nowhere else, and a
+certificate whose private key is gone is a dead letter.
 
 Then turn the job on:
 
@@ -225,6 +225,65 @@ nearly out. That last part matters because an account is allowed very few
 live distribution certificates, and asking for another while the one you
 have still works is how you run out. Superseded material is moved aside
 rather than deleted.
+
+### Keeping the signing material
+
+Both scripts above end by telling you to back something up, and an
+instruction is not a backup. `../local/seal-signing-backup` is:
+
+    ../local/seal-signing-backup --push
+
+It tars `~/.android-keystores` and `~/.apple-signing`, encrypts the
+stream with [age][age], and writes the result into the private
+[dotfiles](https://github.com/skagedal/dotfiles) repository as
+`secrets/mobile-signing.tar.gz.age`, with a plaintext
+`secrets/mobile-signing.json` beside it saying when it was sealed and
+what is in it. No plaintext is ever written to disk: `tar` is piped
+straight into `age`. Re-running with nothing changed does nothing, and an
+archive sealed from material newer than this machine's is refused rather
+than overwritten.
+
+It is encrypted to **two** recipients, listed in
+`secrets/recipients.txt`, and refuses to run with one. The first is this
+machine's age identity, the second is a key kept off it — otherwise
+losing the laptop also loses the key that opens the backup of the laptop.
+See [`../local/signing-backup.recipients.example`](../local/signing-backup.recipients.example)
+for what that file looks like and what the second key can be. Making an
+age key is one command; deciding which second key to trust is not, so the
+script never makes one for you.
+
+The App Store Connect `.p8` is in there too, because it lives in
+`~/.apple-signing` and because a restore that leaves you unable to issue
+a certificate is not a restore. It carries the Admin role, so that is a
+deliberate widening of what the age identity is worth; `--no-api-key`
+leaves it out, and unlike the other two, a lost `.p8` can be replaced by
+revoking it and making another.
+
+Going the other way is `../local/open-signing-backup`:
+
+    ../local/open-signing-backup --list          what is in it
+    ../local/open-signing-backup --into ~/check  unpack it somewhere harmless
+    ../local/open-signing-backup                 restore to the real paths
+
+Restoring is the dangerous direction — an old archive over a working
+laptop replaces an app's identity with a former one — so it refuses to
+write over an existing `~/.android-keystores` or `~/.apple-signing`
+without `--force`, and even then moves the old one aside with a timestamp.
+`--into` is the safe way to check the backup is any good, and `--list`
+needs no more than the identity.
+
+On a machine replacing a lost one, the age identity is the first thing to
+bring over and the one thing no script can do for you; `--identity FILE`
+points at it. The restored files are only half of it, since CI holds its
+own copies as repository secrets: `make-ios-signing` sets the seven iOS
+ones again from what was restored, and the two Android ones are the
+commands `make-release-keystore` prints.
+
+Neither script goes near the repository secrets otherwise, and neither is
+a substitute for them. CI needs plaintext at build time; this is only
+about not losing the material.
+
+[age]: https://age-encryption.org
 
 ### What ends up in the repository's secrets
 

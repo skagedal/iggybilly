@@ -1,0 +1,38 @@
+# The age public keys that local/seal-signing-backup encrypts the signing
+# material to. Public keys only, so this file is not itself a secret —
+# but it lives with the archive, in the private dotfiles repo:
+#
+#   ~/code/dotfiles/secrets/recipients.txt
+#
+# There have to be at least two, and the second one is the point of the
+# whole exercise: a backup of this laptop that only a key on this laptop
+# can open goes wherever the laptop goes.
+#
+# The first is this machine. Make it once, if there is none yet:
+#
+#   mkdir -p ~/.config/age && age-keygen -o ~/.config/age/identity.txt
+#   chmod 600 ~/.config/age/identity.txt
+#
+# age-keygen prints the public key as it writes the private one; it is
+# also in a comment at the top of the file, and `age-keygen -y
+# ~/.config/age/identity.txt` prints it again.
+age1exampleexampleexampleexampleexampleexampleexampleexamplev7l0e0
+
+# The second is kept off this machine, and how is a decision rather than
+# a command. Some options, roughly in order of how much they ask of you:
+#
+#   - A key generated on another computer you own, with its identity file
+#     staying there.
+#   - A key generated on this one, written down or printed, and the
+#     identity file then deleted from disk. age keys are one short line.
+#   - A YubiKey, through age-plugin-yubikey, which gives a recipient line
+#     like `age1yubikey1...`.
+#
+# What none of them can be is a second key sitting next to the first.
+age1exampleexampleexampleexampleexampleexampleexampleexample5j2k9q
+
+# An SSH public key works as a recipient too, and `age -i ~/.ssh/id_ed25519`
+# opens it. Convenient, but the private key is usually on this machine as
+# well, so it does not count as the second recipient.
+#
+#   ssh-ed25519 AAAAC3Nz... you@example.com

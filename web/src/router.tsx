@@ -1,7 +1,7 @@
 import {
   createContext,
+  use,
   useCallback,
-  useContext,
   useEffect,
   useRef,
   useState,
@@ -42,7 +42,7 @@ interface RouterContextValue {
 const RouterContext = createContext<RouterContextValue | null>(null);
 
 export function useRouter(): RouterContextValue {
-  const ctx = useContext(RouterContext);
+  const ctx = use(RouterContext);
   if (!ctx) throw new Error("useRouter must be used inside <Router>");
   return ctx;
 }
@@ -65,7 +65,7 @@ export function Router({ initialEnvelope, initialComponent }: RouterProps) {
   const [pending, setPending] = useState(false);
   // Bumped on every navigation so a slow fetch that lost the race can
   // tell it's been superseded and drop its result.
-  const generation = useRef(0);
+  const generationRef = useRef(0);
 
   const show = useCallback((next: RouteState) => {
     setRoute(next);
@@ -74,7 +74,7 @@ export function Router({ initialEnvelope, initialComponent }: RouterProps) {
 
   const go = useCallback(
     async (url: string, mode: "push" | "replace" | "pop") => {
-      const attempt = ++generation.current;
+      const attempt = ++generationRef.current;
       setPending(true);
       try {
         const res = await fetch(url, {
@@ -93,7 +93,7 @@ export function Router({ initialEnvelope, initialComponent }: RouterProps) {
 
         const envelope = (await res.json()) as PageEnvelope;
         const Component = await loadPage(envelope.entry);
-        if (attempt !== generation.current) return;
+        if (attempt !== generationRef.current) return;
 
         // Save where we were before leaving, so going back restores it.
         if (mode === "push") {
@@ -121,7 +121,7 @@ export function Router({ initialEnvelope, initialComponent }: RouterProps) {
         // do it the old-fashioned way.
         window.location.assign(url);
       } finally {
-        if (attempt === generation.current) setPending(false);
+        if (attempt === generationRef.current) setPending(false);
       }
     },
     [show],
@@ -165,7 +165,7 @@ export function Router({ initialEnvelope, initialComponent }: RouterProps) {
 
   const { Component, envelope } = route;
   return (
-    <RouterContext.Provider value={{ navigate, pending }}>
+    <RouterContext value={{ navigate, pending }}>
       {pending && <div className="nav-progress" />}
       {/* Keyed by entry so switching page kinds remounts rather than
           trying to reconcile two unrelated trees. */}
@@ -173,7 +173,7 @@ export function Router({ initialEnvelope, initialComponent }: RouterProps) {
         key={envelope.entry}
         {...(envelope.props as Record<string, unknown>)}
       />
-    </RouterContext.Provider>
+    </RouterContext>
   );
 }
 

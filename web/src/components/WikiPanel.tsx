@@ -95,6 +95,11 @@ export function WikiPanel({ page: initial }: { page: WikiPage }) {
         <>
           <div
             className="wiki-content"
+            // The server renders wiki Markdown with comrak's `unsafe_`
+            // left false (src/markdown.rs), so raw HTML in the source is
+            // escaped and unsafe link protocols are stripped before this
+            // ever reaches the browser.
+            // eslint-disable-next-line @eslint-react/dom-no-dangerously-set-innerhtml
             dangerouslySetInnerHTML={{ __html: page.contentHtml }}
           />
           {page.lastEdited !== null && (

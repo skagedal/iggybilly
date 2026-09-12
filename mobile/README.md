@@ -111,9 +111,9 @@ made by `./local/run create-user <name>`.
     ../local/build-to-phone            # release
     ../local/build-to-phone --debug
 
-It needs `local/device.env`, which says which phone and which Apple team
+It needs `local/devices.env`, which says which phone and which Apple team
 to sign with. That file is gitignored, because this repository is public
-and those values are personal — copy `local/device.env.example`, or
+and those values are personal — copy `local/devices.env.example`, or
 symlink your own from wherever you keep such things. The team reaches
 Xcode through a generated `ios/Flutter/Signing.xcconfig`, also gitignored,
 which `Debug.xcconfig` and `Release.xcconfig` include optionally so

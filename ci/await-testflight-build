@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+#
+# Wait for the build just uploaded to appear in App Store Connect, and
+# fail the job if it never does.
+#
+# A successful upload means Apple took the bytes, not that it took the
+# build. A binary can be refused seconds later -- a missing purpose
+# string, say -- and the only notice is an email, while the API goes on
+# reporting no build at all. From the outside that silence is
+# indistinguishable from a slow queue, so without this the job stays
+# green, the release looks finished, and the first real sign of trouble
+# is a friend asking where the app went.
+
+set -euo pipefail
+
+: "${APP_STORE_CONNECT_KEY_ID:?not set. See 'Releasing' in mobile/README.md}"
+: "${APP_STORE_CONNECT_ISSUER_ID:?not set. See 'Releasing' in mobile/README.md}"
+: "${APP_STORE_CONNECT_PRIVATE_KEY:?not set. See 'Releasing' in mobile/README.md}"
+: "${BUILD:?not set. It is the build number the workflow gave the upload.}"
+: "${RUNNER_TEMP:?not set. This runs on a GitHub runner, not here.}"
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+bundle_id="tech.skagedal.iggybilly"
+
+# A build that is going to appear takes a few minutes. One that was
+# refused never appears at all, so this ends in a timeout by design.
+give_up_after=$((20 * 60))
+interval=30
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+response_file="$work/response.json"
+key_file="$work/AuthKey.p8"
+
+die() {
+    echo "await-testflight-build: $*" >&2
+    exit 1
+}
+
+(umask 077; printf '%s\n' "$APP_STORE_CONNECT_PRIVATE_KEY" > "$key_file")
+
+# shellcheck source=ci/appstore-api.sh
+. "$root/ci/appstore-api.sh"
+
+token="$(mint_token)"
+
+api GET "/v1/apps?filter[bundleId]=$bundle_id"
+app_id="$(jq -r '.data[0].id // empty' "$response_file")"
+[ -n "$app_id" ] || die "there is no app record for $bundle_id.
+Create one in App Store Connect; an upload has nowhere to land without it."
+
+echo "await-testflight-build: waiting for build $BUILD of app $app_id" >&2
+
+deadline=$((SECONDS + give_up_after))
+while :; do
+    # Minted each time round: the token lasts ten minutes and this waits
+    # twenty.
+    token="$(mint_token)"
+
+    # Matched in jq rather than with filter[version], so that this does
+    # not rest on a filter name meaning what it looks like it means.
+    api GET "/v1/builds?filter[app]=$app_id&limit=20&sort=-uploadedDate"
+    state="$(jq -r --arg build "$BUILD" \
+        '.data[] | select(.attributes.version == $build) | .attributes.processingState' \
+        "$response_file" | head -n 1)"
+
+    case "$state" in
+        "") ;;
+        INVALID | FAILED)
+            die "App Store Connect refused build $BUILD: it is $state.
+Apple sends the reason by email. Look for a message about the uploaded
+build, and note that a filter may be keeping it out of your inbox."
+            ;;
+        *)
+            echo "await-testflight-build: build $BUILD is $state" >&2
+            exit 0
+            ;;
+    esac
+
+    if [ "$SECONDS" -ge "$deadline" ]; then
+        die "build $BUILD never appeared, $((give_up_after / 60)) minutes after an upload
+that reported no errors. That is what a refused binary looks like from
+here: Apple takes the upload, declines the build, and says so only by
+email. Look for a message from App Store Connect about the uploaded
+build, and note that a filter may be keeping it out of your inbox."
+    fi
+
+    sleep "$interval"
+done

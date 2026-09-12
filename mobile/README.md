@@ -160,6 +160,13 @@ the whole repository.
 The two jobs are independent, so the APK is published even when the Apple
 side fails, and the other way round.
 
+The iOS job does not finish at the upload. A successful upload means
+Apple took the bytes, not that it took the build: a binary can be refused
+a minute later, and the only notice is an email while the API goes on
+reporting no build at all. From the outside that silence is
+indistinguishable from a slow queue. So the job then waits for the build
+to show up in App Store Connect, and fails if it never does.
+
 ### Setting up the Android key
 
 Once, on your machine:

@@ -1,4 +1,4 @@
-# Local-first on the phone
+# Local-first, on the phone and the web
 
 Implements [#24](https://github.com/skagedal/iggybilly/issues/24).
 Picks up the "keep a whole playlist downloaded" that
@@ -11,16 +11,21 @@ the labels are a request, the wiki page is a request, and the playlist
 order will be one too. Open the app on a train and you get "Couldn't
 reach …" for clips whose bytes are already in your pocket.
 
-The change is that the phone holds a copy of the band's data — clips,
-labels, which clip carries which label and in what order, and each
-label's wiki page — in a database of its own, renders every screen from
-that, and syncs with the server in the background. Writes made offline
-are queued and land when there is a connection. The server stays the one
-shared truth; the phone stops being a thin client over it.
+The web is further from it still. Every navigation is a round trip for
+the page's props, so every click waits on the server, and with no
+connection the site is not there at all.
 
-Three decisions carry the design, and each is argued where it appears:
+The change is that each client — the phone and the browser — holds a copy
+of the band's data — clips, labels, which clip carries which label and in
+what order, and each label's wiki page — in a database of its own, renders
+every screen from that, and syncs with the server in the background.
+Writes made offline are queued and land when there is a connection. The
+server stays the one shared truth; neither client is a thin client over
+it any more.
 
-1. **The phone holds a replica of the server's data, and only sync
+Four decisions carry the design, and each is argued where it appears:
+
+1. **A client holds a replica of the server's data, and only sync
    writes it.** Every screen reads the replica. Nothing a user does
    touches it directly.
 2. **Sync is incremental, from a change log the server keeps, and the
@@ -30,15 +35,30 @@ Three decisions carry the design, and each is argued where it appears:
 3. **What the user has done and the server has not yet confirmed lives
    in a queue, laid over the replica on every read.** A rejection is a
    dropped queue entry, not an undo.
+4. **One protocol and one model, two implementations.** The feed, the
+   write routes, the overlay rules and the conflict rules are the same for
+   both clients and are specified once. What differs is storage — SQLite
+   on the phone, IndexedDB in the browser — and the code, in Dart and in
+   TypeScript. The two are held to the same behaviour by one set of test
+   cases, written as data, that both test suites run.
 
 The issue points at an account of how far this idea can be taken, and
 what it costs: a general sync engine is months of work, with partial
 sync, access control and schema migration of cached data each a project
 of its own. This design is not general. Four entity kinds, one log, no
 partial sync, no per-device state on the server, no merging of text. It
-is a few hundred lines on each side, and the protocol is not specific to
-Flutter, so a web client that wanted to read from IndexedDB later could
-use the same feed.
+is a few hundred lines on the server and on each client.
+
+The issue also asks whether a framework — Jazz, or something like the
+sync engine Linear built — should do this. Not here. What those buy is
+generality this app does not need: arbitrary schemas, partial sync,
+permissions evaluated on the client, CRDT merges of concurrent edits.
+What they cost is the server: each wants to own the data model, and this
+one already has a SQLite database, a Rust server and two clients in two
+languages that no single framework serves well. The architecture Linear
+describes is the one this spec follows — a local replica, a monotonic
+change feed, an optimistic transaction queue laid over it — written
+directly against four tables rather than generalised.
 
 ## Ordering
 
@@ -59,13 +79,14 @@ them is one more entity kind and nothing else.
 
 ## Functionality
 
-### What is on the phone
+### What is on a client
 
 Everything the list, the clip page, the playlist and the wiki page show:
 every clip's name, uploader, dates, duration and waveform peaks; every
 label; every label-on-clip with its playlist position; and the current
-wiki page of every label that has one. Audio stays what it is today, a
-cache plus the clips you asked to keep, and is not part of the replica.
+wiki page of every label that has one. Audio is not part of the replica:
+on the phone it stays what it is today, a cache plus the clips you asked
+to keep, and in the browser it stays streamed.
 
 That is the whole band's data, not a slice of it. There is no partial
 sync and no "recent clips only": a band has hundreds of clips, perhaps a
@@ -81,11 +102,13 @@ not there is a network, and a sync runs behind it.
 
 A sync runs at launch, when the app returns to the foreground, on
 pull-to-refresh, after every write, and once a minute while the app is
-in front. Nothing is pushed from the server: a band of five does not
+in front. In the browser, "launch" is loading the site, "foreground" is
+the tab becoming visible, and pull-to-refresh is the **Sync now** in the
+status popover; reloading the page also syncs, since it is a launch. Nothing is pushed from the server: a band of five does not
 need a socket held open, and a minute is quicker than anyone notices.
 
-The app bar carries a small cloud icon when the last sync failed. It is
-the only sign of being offline. Tapping it shows when the phone last
+The app bar — the header, on the web — carries a small cloud icon when
+the last sync failed. It is the only sign of being offline. Tapping it shows when the phone last
 synced, how many changes are waiting to go up, and a **Sync now**
 button. There is no banner for the ordinary case of no signal, because
 the ordinary case is that everything works.
@@ -96,7 +119,9 @@ The clip list, its filters, the playlist view, the clip page and the
 wiki page all work with no network, from the replica. Playing a clip
 that is on disk works exactly as it does now. Playing one that is not
 fails as it does now, with the player's "Couldn't reach …" error; there
-is nothing to be done about bytes that are not there.
+is nothing to be done about bytes that are not there. In the browser
+nothing is on disk, so offline you can read everything and play nothing,
+and the player says so the way it does today when the server is down.
 
 The label picker's suggestions come from the replica too, so labelling
 offline offers the same names it would online, ordered the same way.
@@ -109,7 +134,8 @@ Some screens stay online-only, each for a reason:
   bytes.
 - **The account screen.** Devices and passwords are credentials. There
   is nothing to render offline that you could act on.
-- **Upload.** A clip is ten megabytes and a new row the server has not
+- **Signing in**, on either client, which is a request by definition.
+- **Upload**, on either client. A clip is ten megabytes and a new row the server has not
   numbered. Queueing uploads is a real feature — record in the basement,
   upload when you surface — and is left for later, because it changes
   what [recording-in-app](recording-in-app.md) says about a recording
@@ -117,8 +143,8 @@ Some screens stay online-only, each for a reason:
 
 ### Writing offline
 
-Rename, add a label, remove a label, reorder a playlist, save a wiki
-page, delete a clip. Each takes effect on the screen the moment you do
+The same on both clients. Rename, add a label, remove a label, reorder a
+playlist, save a wiki page, delete a clip. Each takes effect on the screen the moment you do
 it, exactly as if the server had answered, and is queued. The cloud icon
 shows how many are waiting. When a sync gets through, the queue is sent
 in the order it was written and the replica is refreshed behind it.
@@ -138,9 +164,9 @@ already showed what the server actually has.
 
 The sharp case, so spelled out. Deleting a clip offline hides it at
 once, from the list, the playlist and any queue playing from that
-playlist, and stops it if it is playing, as a delete does now. The audio
-stays on disk until the server confirms the delete, so a delete the
-server refuses puts the clip back with its bytes. Anything queued
+playlist, and stops it if it is playing, as a delete does now. On the
+phone the audio stays on disk until the server confirms the delete, so a
+delete the server refuses puts the clip back with its bytes. Anything queued
 earlier against the same clip — a rename, a label — is dropped from the
 queue; there is no point sending a rename ahead of a delete.
 
@@ -164,10 +190,11 @@ merge. [structured-document-storage](structured-document-storage.md)
 changes what a page is stored as, not how a save works — a save still
 replaces the page whole — so the rule survives it unchanged.
 
-This is stricter than the web, which as spec 001 notes lets the second
-save win outright. The web is left as it is. A wiki edit on the phone
-can be hours old by the time it lands, and an hours-old edit silently
-overwriting a fresh one is the case the base revision exists for.
+This is stricter than the web is today, which as spec 001 notes lets the
+second save win outright. The web adopts the same rule, because it now
+queues too: a queued edit can be hours old by the time it lands, on
+either client, and an hours-old edit silently overwriting a fresh one is
+the case the base revision exists for.
 
 **Two people reorder the same playlist.** A move is "put this clip after
 that one", a statement about neighbours rather than positions, which is
@@ -190,6 +217,9 @@ is nothing. Add and remove of the same label from two phones resolve to
 whichever landed last. None of these produce a message.
 
 ### Keep a label downloaded
+
+Phone only. The browser keeps no audio, and this is a promise about
+audio; see "Open questions".
 
 The playlist view — the clip list with exactly one filter — gains a
 **Keep downloaded** switch in its heading, beside the count and the
@@ -225,19 +255,35 @@ basement, open the app.
 
 ### Signing out
 
-Signing out deletes the replica and the queue along with the token. If
+Signing out deletes the replica and the queue along with the token, or
+on the web along with the session. If
 the queue is not empty the app says so first — "2 changes haven't been
 saved to the server yet" — and offers to sync now or sign out anyway.
 The audio cache is left alone, as it is today. Being signed out by the
-server, because the device was revoked or a password changed, keeps the
-replica and the queue on disk: signing back in as the same user on the
+server — the device revoked, a password changed, the session expired —
+keeps the replica and the queue: signing back in as the same user on the
 same server picks the queue up where it was.
 
 ### The web
 
-Nothing changes. The web keeps its session and its page props. The
-sync feed is not phone-shaped, and a browser client reading it into
-IndexedDB is a possible later spec, not this one.
+Everything above holds in the browser, with the phone-only parts named
+where they appear. Three things are particular to it.
+
+**The site opens with no network.** Once visited, the site's shell and
+its scripts are kept by the browser, so opening it on a train shows the
+clip list from the replica rather than the browser's offline page. This
+is what makes "open the app" mean the same on both clients. Every URL
+that works today still works as a link and on reload.
+
+**Clicks stop waiting.** Moving between the list, a clip and a filter is
+drawn from the replica, with no progress bar, because there is no
+request. That is the visible difference online, and it is most of the
+reason to do this on the web at all.
+
+**Several tabs are one client.** Two tabs of the site share one replica
+and one queue. A rename in one tab shows in the other at once, only one
+tab syncs at a time, and closing a tab with writes waiting loses
+nothing: the next tab, or the next visit, sends them.
 
 ## Implementation
 
@@ -350,6 +396,13 @@ renumbered would be the wrong shape.
 ### The sync route
 
     GET /api/v1/sync?since=0&limit=500
+    GET /api/sync?since=0&limit=500
+
+The same handler on both surfaces: bearer token on the phone's, session
+cookie on the web's. The answer does not depend on who asks — every
+member of the band sees every clip — which is what lets one feed serve
+both and lets the answer carry `uploadedBy` rather than a per-user
+`canDelete`.
 
 `since` is the last `seq` the client applied, zero on a fresh replica.
 `limit` defaults to 500 and is capped at 1000. The answer:
@@ -410,7 +463,8 @@ A thousand clips with their labels is a handful of pages.
 
 ### Wiki saves cite their base
 
-`POST /api/v1/labels/{id}/wiki` gains an optional `baseRevisionId`:
+`POST /api/v1/labels/{id}/wiki` and `POST /api/labels/{id}/wiki` gain
+an optional `baseRevisionId`:
 
 ```json
 { "content": "…", "baseRevisionId": 31 }
@@ -424,9 +478,10 @@ is that one (`null` meaning "no page yet"). Otherwise the answer is
 { "error": "This page was edited by anna after you started.", "page": { "labelId": 4, "revisionId": 34, "content": "…", "hasContent": true, "lastEditedBy": "anna", "lastEditedAt": "…" } }
 ```
 
-`GET /api/v1/labels/{id}/wiki` and the save's own answer gain
-`revisionId`. The web's `/api/labels/{id}/wiki` is untouched: it sends
-no base and is not checked.
+`GET /api/v1/labels/{id}/wiki` and the save's own answer, on both
+surfaces, gain `revisionId`. The base stays optional on the server so an
+old phone build that sends none keeps working; both new clients always
+send it.
 
 ### Rust
 
@@ -437,8 +492,8 @@ no base and is not checked.
 - `src/queries/wiki.rs` — `Page` and `Revision` gain `revision_id`;
   `save` gains a `base: Option<Option<i64>>` and returns a `SaveOutcome`
   of `Saved` or `Conflict(Page)`. The check and the insert are one
-  transaction: `SELECT MAX(id)` for the label, compare, insert. The web
-  handler passes `None` and cannot conflict.
+  transaction: `SELECT MAX(id)` for the label, compare, insert. A save
+  without a base passes `None` and cannot conflict.
 - `src/api/sync.rs`, new — the route, and the `Clip`, `ClipLabel` and
   `Wiki` wire structs. `queries::clips::Clip` gains `size_bytes`
   through `CLIP_COLUMNS`, and `api::clips::Clip` gains `size_bytes` and
@@ -447,12 +502,37 @@ no base and is not checked.
 - `src/api/labels.rs` — `baseRevisionId` on `save_wiki`, `revisionId` on
   `WikiPage`.
 - `src/api/mod.rs` — `.route("/sync", get(sync::page))`.
+- `src/handlers/sync.rs`, new, and `src/web.rs` — the same route on the
+  session-authenticated `/api`, answering with the same wire structs.
+  `src/handlers/labels.rs` gains `baseRevisionId` as the api module does.
+- `src/handlers/mod.rs` — the page routes for replica-backed pages stop
+  loading their data. See "The web: routing".
 - `tests/api_v1.rs` — the backfill produces one row per entity and a
   fresh client paging from zero sees all of it; an insert, an update and
   a delete each move the entity to a new `seq`; a deleted clip arrives
   under `deleted` and never under `clips`; a renumber logs every
   membership; a save with a stale base is a 409 carrying the current
-  page and a save with the right base lands.
+  page and a save with the right base lands. `tests/web.rs` gains the
+  sync route under a session.
+
+### The shared cases
+
+`testdata/sync/`, new, holds the behaviour both clients must agree on,
+as JSON the Dart and the TypeScript tests both read:
+
+- `overlay/*.json` — a snapshot, a queue, and the snapshot the screens
+  must see after the overlay. One file per kind, plus the delete
+  collapse, the rename collapse, a provisional label and two moves of the
+  same clip.
+- `push/*.json` — a queued write, a server status and body, and what
+  becomes of the row: pushed, dropped, rejected with this reason, or left
+  for the next sync. One per row of the push table and per rejection
+  class.
+- `apply/*.json` — a replica, a sync page, and the replica after.
+
+The phone's and the web's own tests are then about their storage and
+their screens. The rules are in one place, and a change to them fails
+both suites until both are changed.
 
 ### The phone: the database
 
@@ -567,7 +647,8 @@ migrated.
 ### The store
 
 `mobile/lib/src/local/store.dart`, `LocalStore`, a `ChangeNotifier` and
-the only thing the screens read.
+the only thing the screens read. The web's store, below, has the same
+methods and the same overlay; the description here is of both.
 
 It reads the four replica tables whole into memory — a `Snapshot` of
 clips, labels, memberships and pages — after every applied page and at
@@ -619,7 +700,8 @@ server issued. It lasts until the next successful sync.
 
 ### The sync engine
 
-`mobile/lib/src/local/sync_engine.dart`, `SyncEngine`. One `sync()`
+`mobile/lib/src/local/sync_engine.dart`, `SyncEngine`, and its web
+counterpart below. One `sync()`
 method, serialised: a call while one is running waits for it and then
 runs once more, so a burst of writes is one push. The loop is push, then
 pull, then clean up.
@@ -651,8 +733,9 @@ A success marks the row `pushed`. A rejection is decided by status:
 - **400, 403, 409**: the row moves to `rejected_writes` with the
   server's message, except the wiki case above. The overlay is rebuilt
   without it, which is what puts the screen back.
-- **401**: `Session.handleUnauthorized`, as today. The file stays on
-  disk; the queue resumes after the next sign-in as this user.
+- **401**: `Session.handleUnauthorized`, as today, or on the web the
+  redirect to `/login` the router already does. The replica and queue
+  stay; the queue resumes after the next sign-in as this user.
 - **5xx, or no response**: the push stops here, the rows stay unpushed,
   and the pull is skipped, since a server that cannot take a write
   cannot answer a pull either. The next trigger tries again. There is no
@@ -761,21 +844,142 @@ store instead and rebuilds when it notifies. Concretely:
 - `mobile/lib/main.dart`, `mobile/pubspec.yaml` — wiring and the two
   packages.
 
-Tests, in `mobile/test/`: `local_store_test.dart` for the overlay — each
-kind's effect, the delete collapse, a provisional label, a filter that a
-queued label add makes true; `sync_engine_test.dart` against
-`FakeHttpClient` for push-then-pull, a lost response for each kind, each
-rejection class, a pull that fails after a push, and a two-page pull
-applied as two transactions; `keep_policy_test.dart` for a label's
+Tests, in `mobile/test/`: `shared_cases_test.dart` runs
+`testdata/sync/` against the store and the engine; `local_store_test.dart`
+for what is not in the cases — a filter that a queued label add makes
+true, the snapshot rebuilding on notify; `sync_engine_test.dart` against
+`FakeHttpClient` for push-then-pull, a pull that fails after a push, and
+a two-page pull applied as two transactions; `keep_policy_test.dart` for a label's
 membership growing and shrinking and the cache flags following;
 `app_test.dart`'s scripted server gains `/api/v1/sync` and the flows are
 re-scripted through it, plus one that edits a wiki page, is answered
 409, and opens its text.
 
+### The web: storage
+
+IndexedDB, used directly, one database per user, `iggybilly-<userId>`.
+The origin already separates servers. No wrapper library: the calls
+needed are open with an upgrade, a readwrite transaction over several
+stores, `getAll` and `put`, and a thirty-line promise helper covers them.
+
+Not SQLite compiled to WebAssembly, though it would let the phone's
+schema and statements be reused verbatim. The store reads everything
+into memory and answers from there, on both clients, so SQL is never
+what answers a screen; the database is there for a transactional apply
+and for the cursor, the queue and the data to commit together, and
+IndexedDB transactions give exactly that. Against it, the WebAssembly
+build is a megabyte on first load and needs OPFS, whose synchronous
+access is only available in a worker, for a query language nothing uses.
+
+The object stores mirror the phone's tables one for one — `syncState`,
+`clips`, `labels`, `clipLabels` keyed by `[clipId, labelId]`,
+`wikiPages`, `pendingWrites` with an auto-increment key, and
+`rejectedWrites` — with the same columns in camelCase, as the feed spells
+them. There are no kept sets. The database version plays the part of
+`user_version`: a replica shape change clears the four replica stores
+and the cursor in `onupgradeneeded`, and the queue is migrated.
+
+Browsers may evict IndexedDB under storage pressure. The app asks for
+`navigator.storage.persist()` after the first sync; if it is refused or
+the data is evicted anyway, the replica is refilled from zero on the next
+visit, and only an unsent queue is lost — which is the case the signing
+out prompt already exists for, and a risk worth stating in the status
+popover when persistence was refused.
+
+### The web: store, engine and tabs
+
+`web/src/local/store.ts`, `LocalStore`, and `web/src/local/sync.ts`,
+`SyncEngine`, are the phone's two classes in TypeScript: the same
+snapshot in memory, the same overlay, the same push table, the same
+apply. The store exposes `subscribe` and `getSnapshot` for React's
+`useSyncExternalStore`, so a page reads it with a hook, `useStore()`,
+and re-renders when it changes.
+
+Tabs are coordinated with two browser primitives and no server help.
+`navigator.locks.request("iggybilly-sync", …)` serialises `sync()`
+across every tab, so two tabs never push the same row. A
+`BroadcastChannel("iggybilly")` carries one message, "changed", posted
+after every apply and every enqueue; a tab that hears it re-reads the
+snapshot from IndexedDB and notifies. Each tab runs its own one-minute
+timer only while visible, and the lock makes the extra ones cheap.
+
+The wiki page renders from the replica, so the browser needs to render a
+page itself. Before
+[structured-document-storage](structured-document-storage.md) lands that
+means Markdown in the browser, which is the disagreement that spec
+exists to end; so this depends on it, and the web renders the stored
+`document` with `web/src/document.tsx`, a switch over node types
+producing React elements, as the phone does with widgets. `content_html`
+stops being sent to the web.
+
+### The web: routing
+
+Today the router holds no route table: it fetches each URL's
+`{entry, title, props}` from the server. That cannot work offline, and
+online it is the round trip this is meant to remove. So the client gains
+a route table after all, for the pages that read the replica:
+
+| Path | Entry | Params |
+| --- | --- | --- |
+| `/` with `?label=` filters | `index` | the filters |
+| `/clips/{id}` | `clip` | `id` |
+
+The router matches these first and renders from the store with no
+request. Every other path — the wiki history, the account page, login —
+keeps the envelope fetch exactly as now, and so keeps working online and
+failing offline as it does today.
+
+The server keeps serving the shell at every URL, so links and reloads
+are unchanged. For the two replica-backed pages it stops loading data:
+their envelope carries only `username` and the entry, and the page reads
+the rest from the store. This is a reversal of the router's stated
+design, and its comment is rewritten to say so and why: the URLs stay
+the server's, the data does not.
+
+`web/src/sw.ts`, new, a service worker built by `build.mjs` to
+`static/sw.js` and served from the root so its scope is the whole site.
+It does two things. Hashed assets under `/static/dist/` are served cache
+first, since a hashed name never changes. Navigations are served network
+first, falling back to a cached copy of the shell when offline; the
+cached shell's embedded envelope is ignored for replica-backed paths,
+which is what the router does anyway. Nothing under `/api` and nothing
+audio is cached. A new deploy is picked up on the next navigation that
+reaches the network, and the worker is registered from `main.tsx` only
+in production builds, so `local/run` is not haunted by a stale one.
+
+### The web: screens
+
+- `web/src/pages/index.tsx` — clips, filters and wiki panels from
+  `useStore()`; the uploader stays online-only and posts as now, then
+  syncs.
+- `web/src/pages/clip.tsx` — reads the clip from the store; rename,
+  labels and delete enqueue.
+- `web/src/components/WikiPanel.tsx` — renders the document; save
+  enqueues with its base; a rejection shows the conflict with
+  **Open your text**.
+- `web/src/components/LabelInput.tsx` — suggestions from the store.
+- `web/src/components/Layout.tsx` — the cloud icon, its popover, and the
+  rejected-writes line.
+- `web/src/player.tsx` — a playlist queue follows the store, as on the
+  phone.
+- `web/src/api.ts`, `web/src/types.ts` — `sync`, `baseRevisionId`, and
+  the feed's types.
+- `web/src/main.tsx` — opens the store, the first-sync screen, the
+  worker registration.
+
+Tests: the web has none today. `web/src/local/*.test.ts` run under
+`node --test`, which in Node 24 runs TypeScript directly, with
+`fake-indexeddb` as the one new development dependency. They run
+`testdata/sync/` against the store and the engine, plus the web's own:
+an upgrade that clears the replica and keeps the queue, and two stores
+over one database seeing each other's writes. `pnpm run check` gains
+`test`, so CI runs them where it already runs the lint.
+
 ### Documentation
 
-The root `README.md`'s phone lines under "What it does" gain the
-replica and offline writes, and `mobile/README.md` gains a "The replica"
+The root `README.md`'s lines under "What it does" gain the replica and
+offline writes for both clients, a short "Sync" section describes the
+feed and the queue once for both, and `mobile/README.md` gains a "The replica"
 section after "Clips on disk" saying what is on the phone, what stays
 online, and how the queue and the overlay work; its "How it is put
 together" table gains `LocalStore` and `SyncEngine` over a `Database`
@@ -783,18 +987,25 @@ they are handed, and `KeepPolicy` over the cache.
 
 ### Staging
 
-Three slices, each shippable, in this order.
+Five slices, each shippable, in this order.
 
-1. **The replica.** The change log, the sync route, the local database,
-   the store without a queue, and every screen reading from it. Writes
-   still go straight to the server as they do now and fail offline as
-   they do now, followed by a pull. The app opens on a train. This is
-   most of the code and all of the risk.
-2. **Keep a label.** `kept_labels`, the policy, the heading switch and
-   the storage section. Small on top of the replica, and the thing
-   people asked for.
-3. **The queue.** Offline writes, the overlay, rejections, the wiki's
-   base revision on the server. Then comments.
+1. **The feed.** The change log and the sync route on both surfaces, and
+   `testdata/sync/apply`. Nothing reads it yet; it can land and be looked
+   at with `curl`.
+2. **The phone's replica.** The local database, the store without a
+   queue, and every screen reading from it. Writes still go straight to
+   the server and fail offline as they do now, followed by a pull. The
+   app opens on a train. Most of the phone's code and all of its risk.
+3. **The web's replica.** IndexedDB, the store, tabs, the client routes
+   and the service worker. Writes as in 2. Requires
+   structured-document-storage. Clicks stop waiting.
+4. **Keep a label.** `kept_labels`, the policy, the heading switch and
+   the storage section. Phone only, small on top of the replica, and the
+   thing people asked for.
+5. **The queue, on both.** Offline writes, the overlay, rejections, the
+   wiki's base revision on the server, and the rest of `testdata/sync/`.
+   Both clients in one slice, so the rules never differ in production.
+   Then comments.
 
 ## Open questions
 
@@ -826,8 +1037,17 @@ Three slices, each shippable, in this order.
 - **Discord posts land when the write lands.** A wiki edit made in the
   basement is announced when the phone surfaces, with that time. The
   message could say "edited earlier"; it does not seem worth a branch.
-- **The web is not local-first**, and the issue's comment wants
-  something that works on both. The feed is client-agnostic, and the
-  web's version of this is its own spec with IndexedDB in place of
-  SQLite and the same overlay. It is not in this one because the phone
-  is where the train is.
+- **Two implementations of the same client.** The rules are shared as
+  data, not as code, so the Dart and the TypeScript can still drift in
+  anything the cases do not cover. The alternative — one client core
+  compiled to both, in Rust or in Dart-to-JavaScript — is a build system
+  larger than the code it would share.
+- **No audio offline in the browser.** The Cache API could hold clips
+  and a service worker could serve them, which would bring keep-a-label to
+  the web. Browsers evict it under pressure and cap it per site, so it
+  would be a promise the browser can break silently. Left out until
+  someone wants to rehearse from a laptop without signal.
+- **The client route table.** Two routes duplicated between the server
+  and the router. If a page is added that reads the replica, it is a line
+  in each, and forgetting the client's line only costs that page its
+  offline mode.

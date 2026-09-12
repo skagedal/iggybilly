@@ -267,8 +267,10 @@ since the server is what parses.
 
 `/api/v1` sends both: `content` for the editor, `document` for rendering.
 The web's `/api` sends `content` and `content_html` as it does now, and
-does not need the document, since it cannot render one any better than
-the server can.
+does not need the document yet, since it cannot render one any better
+than the server can. That changes with
+[local-first](local-first.md), where the browser renders from its own
+replica and so renders the document itself.
 
 A parse failure on save answers 400 with the line and a message, on both
 surfaces, and both editors show it against the text rather than as a

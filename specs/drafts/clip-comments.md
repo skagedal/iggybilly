@@ -3,16 +3,19 @@
 Implements [#6](https://github.com/skagedal/iggybilly/issues/6).
 
 > **Blocked.** Two things come first, by decision:
-> `structured-document-storage.md` and local-first
+> [structured-document-storage](structured-document-storage.md) and
+> [local-first](local-first.md)
 > ([#24](https://github.com/skagedal/iggybilly/issues/24)). Comments are
 > authored text, so the storage question below is settled by the first
 > of those and not here. They are also what people will write offline,
 > so they are where sync and conflict resolution first bite. Starting
 > here would mean building both foundations twice.
 >
-> The storage section of this draft is therefore **out of date as
-> written** and needs rewriting when this is picked up. Everything else
-> stands.
+> Two sections of this draft are therefore **out of date as written** and
+> are to be rewritten on top of those specs when this is picked up:
+> "Writing, editing, deleting", on storing Markdown source, and "Failure
+> and offline", which says comments are network-only and nothing is
+> queued. Everything else stands.
 
 The thing worth saying about a clip is almost always about a moment in
 it: the entry is late, that chord is wrong, do that again. Saying it in

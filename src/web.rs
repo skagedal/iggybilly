@@ -151,8 +151,12 @@ pub async fn build_app(pool: SqlitePool, config: Arc<Config>) -> Result<Router> 
 
     Ok(pages
         .merge(Router::new().nest("/api", api))
-        // Audio is neither: the browser hits it directly as an <audio>
-        // src and as a download link, so it stays a plain URL.
+        // And /api/v1 is the app's: the same data, shaped for a phone
+        // rather than for the React pages. See `crate::api`.
+        .merge(Router::new().nest("/api/v1", crate::api::router()))
+        // Audio is none of those: the browser hits it directly as an
+        // <audio> src and as a download link, and the app hands it to
+        // the platform player, so it stays a plain URL.
         .route("/clips/{id}/audio", get(clips::audio))
         .route("/healthz", get(healthz))
         .nest_service("/static", ServeDir::new(&static_dir))
@@ -206,24 +210,96 @@ where
     }
 }
 
-/// Like CurrentUser, but for JSON endpoints, which should answer 401
-/// rather than redirect — fetch would follow the redirect and hand the
-/// caller a login page where it expected data.
-pub struct CurrentUserApi(pub SessionUser);
+/// The caller of a JSON endpoint, however they identified themselves.
+///
+/// Two clients, two credentials: the browser sends its session cookie,
+/// the app sends `Authorization: Bearer`. The endpoints don't care which
+/// — they want a user — so the difference is resolved once, here. A
+/// bearer token is tried first: a request that presents one has told us
+/// what it is, and falling back to a cookie after a bad token would be
+/// how you accidentally act as the wrong user on a shared device.
+///
+/// These endpoints answer 401 rather than redirecting. A redirect to the
+/// login page is something `fetch` follows and the app cannot use, so
+/// either client would end up parsing HTML where it expected data.
+pub struct ApiUser {
+    pub user: SessionUser,
+    /// The token this request arrived with, when it arrived with one.
+    /// The token endpoints use it to mark the caller's own device.
+    pub token_id: Option<i64>,
+}
 
-impl<S> FromRequestParts<S> for CurrentUserApi
-where
-    S: Send + Sync,
-{
+impl FromRequestParts<AppState> for ApiUser {
     type Rejection = AppError;
 
-    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let session = Session::from_request_parts(parts, state)
-            .await
-            .map_err(|_| AppError::Unauthorized("not signed in".into()))?;
-        match session.get::<SessionUser>(SESSION_USER_KEY).await {
-            Ok(Some(u)) => Ok(CurrentUserApi(u)),
-            _ => Err(AppError::Unauthorized("not signed in".into())),
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, AppError> {
+        if let Some(secret) = bearer_token(parts) {
+            return match crate::tokens::authenticate(&state.pool, &secret).await? {
+                Some((user, token_id)) => Ok(ApiUser {
+                    user,
+                    token_id: Some(token_id),
+                }),
+                None => Err(AppError::Unauthorized("invalid or revoked token".into())),
+            };
         }
+        Ok(ApiUser {
+            user: session_user(parts, state).await?,
+            token_id: None,
+        })
+    }
+}
+
+/// The audio route, which is neither a page nor a JSON endpoint: the
+/// browser reaches it as an `<audio>` source and the app hands it to the
+/// platform player, so it takes either credential and fails the way the
+/// caller can act on — 401 for a request that presented a token, a
+/// redirect to the login page for a browser that presented nothing.
+pub struct MediaUser(#[allow(dead_code)] pub SessionUser);
+
+impl FromRequestParts<AppState> for MediaUser {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Response> {
+        if let Some(secret) = bearer_token(parts) {
+            return match crate::tokens::authenticate(&state.pool, &secret).await {
+                Ok(Some((user, _))) => Ok(MediaUser(user)),
+                Ok(None) => {
+                    Err(AppError::Unauthorized("invalid or revoked token".into()).into_response())
+                }
+                Err(e) => Err(e.into_response()),
+            };
+        }
+        match session_user(parts, state).await {
+            Ok(user) => Ok(MediaUser(user)),
+            Err(_) => Err(Redirect::to("/login").into_response()),
+        }
+    }
+}
+
+/// The `Authorization: Bearer <token>` value, if the request carries a
+/// well-formed one. The scheme is matched case-insensitively, as RFC
+/// 7235 requires.
+fn bearer_token(parts: &Parts) -> Option<String> {
+    let raw = parts
+        .headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?;
+    let (scheme, value) = raw.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return None;
+    }
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+/// The signed-in user from the session cookie, or an Unauthorized error.
+async fn session_user(parts: &mut Parts, state: &AppState) -> Result<SessionUser, AppError> {
+    let session = Session::from_request_parts(parts, state)
+        .await
+        .map_err(|_| AppError::Unauthorized("not signed in".into()))?;
+    match session.get::<SessionUser>(SESSION_USER_KEY).await {
+        Ok(Some(u)) => Ok(u),
+        _ => Err(AppError::Unauthorized("not signed in".into())),
     }
 }

@@ -7,7 +7,9 @@ edition = "2021"
 # Web
 axum = { version = "0.8", features = ["multipart", "macros"] }
 axum-extra = { version = "0.10", features = ["query"] }
-tower = "0.5"
+# "util" gives ServiceExt::oneshot, used to hand the audio route to
+# tower-http's ServeFile.
+tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["fs", "trace", "limit"] }
 tower-sessions = "0.14"
 tower-sessions-sqlx-store = { version = "0.15", features = ["sqlite"] }
@@ -26,6 +28,9 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "macros", "migr
 # Auth / crypto
 argon2 = "0.5"
 rand = "0.8"
+# Fingerprints the app's bearer tokens for storage. Already in the tree
+# under argon2, so this only promotes it to a direct dependency.
+sha2 = "0.10"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

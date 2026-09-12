@@ -10,8 +10,8 @@ use crate::{
     datefmt,
     error::{AppError, AppResult},
     handlers::{clips, page, PageFormat},
-    markdown,
-    web::{AppState, CurrentUser, CurrentUserApi},
+    markdown, queries,
+    web::{ApiUser, AppState, CurrentUser},
 };
 
 /// Cap on a wiki page's Markdown source. Generous for prose; just keeps
@@ -28,7 +28,7 @@ pub struct AddRequest {
 /// guess at what the server did with the name.
 pub async fn add(
     State(state): State<AppState>,
-    CurrentUserApi(user): CurrentUserApi,
+    ApiUser { user, .. }: ApiUser,
     AxumPath(clip_id): AxumPath<i64>,
     Json(req): Json<AddRequest>,
 ) -> AppResult<Response> {
@@ -39,36 +39,17 @@ pub async fn add(
     // Normalise to lowercase, then validate — so "Verse-1" becomes
     // "verse-1" silently but "verse 1" or "--bad" fails loudly.
     let normalised = raw.to_lowercase();
-    if !is_valid_label(&normalised) {
+    if !queries::labels::is_valid(&normalised) {
         return Err(AppError::BadRequest(
             "labels must be lower-kebab-case: letters/digits separated by single dashes, no spaces or other punctuation".into(),
         ));
     }
 
-    let exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM clips WHERE id = ?")
-        .bind(clip_id)
-        .fetch_optional(&state.pool)
-        .await?;
-    if exists.is_none() {
+    if !queries::clips::exists(&state.pool, clip_id).await? {
         return Err(AppError::NotFound);
     }
 
-    let mut tx = state.pool.begin().await?;
-    sqlx::query("INSERT OR IGNORE INTO labels (name) VALUES (?)")
-        .bind(&normalised)
-        .execute(&mut *tx)
-        .await?;
-    let label_id: (i64,) = sqlx::query_as("SELECT id FROM labels WHERE name = ?")
-        .bind(&normalised)
-        .fetch_one(&mut *tx)
-        .await?;
-    sqlx::query("INSERT OR IGNORE INTO clip_labels (clip_id, label_id, added_by) VALUES (?, ?, ?)")
-        .bind(clip_id)
-        .bind(label_id.0)
-        .bind(user.id)
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
+    queries::labels::add_to_clip(&state.pool, clip_id, &normalised, user.id).await?;
 
     let labels = clips::load_labels(&state, clip_id).await?;
     Ok(Json(labels).into_response())
@@ -76,14 +57,10 @@ pub async fn add(
 
 pub async fn remove(
     State(state): State<AppState>,
-    _user: CurrentUserApi,
+    _user: ApiUser,
     AxumPath((clip_id, label_id)): AxumPath<(i64, i64)>,
 ) -> AppResult<Response> {
-    sqlx::query("DELETE FROM clip_labels WHERE clip_id = ? AND label_id = ?")
-        .bind(clip_id)
-        .bind(label_id)
-        .execute(&state.pool)
-        .await?;
+    queries::labels::remove_from_clip(&state.pool, clip_id, label_id).await?;
     let labels = clips::load_labels(&state, clip_id).await?;
     Ok(Json(labels).into_response())
 }
@@ -106,130 +83,16 @@ struct Suggestions {
 
 pub async fn search(
     State(state): State<AppState>,
-    _user: CurrentUserApi,
+    _user: ApiUser,
     Query(q): Query<SearchQuery>,
 ) -> AppResult<Response> {
-    let raw_query = q.q.unwrap_or_default();
-    let trimmed = raw_query.trim();
-
-    // Empty query: show the labels most recently used on any clip,
-    // minus any already on this clip. This way focusing the input
-    // immediately shows pickable options.
-    if trimmed.is_empty() {
-        let matches = recent_labels(&state, q.clip_id).await?;
-        return Ok(Json(Suggestions {
-            query: String::new(),
-            matches,
-            can_create: false,
-        })
-        .into_response());
-    }
-
-    let normalised = trimmed.to_lowercase();
-    // Escape SQL LIKE metacharacters: `\` first (so we don't double-
-    // escape our own backslashes), then `%` and `_`. The query is sent
-    // with `ESCAPE '\'` so SQLite treats the prefixed chars as literal.
-    let pattern = format!(
-        "%{}%",
-        normalised
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_")
-    );
-
-    let matches: Vec<(String,)> = if let Some(clip_id) = q.clip_id {
-        sqlx::query_as(
-            "SELECT name FROM labels WHERE name LIKE ? ESCAPE '\\'
-             AND id NOT IN (SELECT label_id FROM clip_labels WHERE clip_id = ?)
-             ORDER BY name COLLATE NOCASE LIMIT 10",
-        )
-        .bind(&pattern)
-        .bind(clip_id)
-        .fetch_all(&state.pool)
-        .await?
-    } else {
-        sqlx::query_as(
-            "SELECT name FROM labels WHERE name LIKE ? ESCAPE '\\'
-             ORDER BY name COLLATE NOCASE LIMIT 10",
-        )
-        .bind(&pattern)
-        .fetch_all(&state.pool)
-        .await?
-    };
-    let names: Vec<String> = matches.into_iter().map(|(n,)| n).collect();
-
-    // "Create" option only when (a) it's a valid label and (b) it
-    // isn't already an exact match in the result list.
-    let exact = names.iter().any(|n| n == &normalised);
-    let can_create = !exact && is_valid_label(&normalised);
-
+    let s = queries::labels::suggest(&state.pool, &q.q.unwrap_or_default(), q.clip_id).await?;
     Ok(Json(Suggestions {
-        query: normalised,
-        matches: names,
-        can_create,
+        query: s.query,
+        matches: s.matches,
+        can_create: s.can_create,
     })
     .into_response())
-}
-
-/// Most recently used labels across all clips, optionally excluding
-/// labels already on the given clip. 10 results.
-async fn recent_labels(state: &AppState, exclude_clip: Option<i64>) -> AppResult<Vec<String>> {
-    let rows: Vec<(String,)> = if let Some(clip_id) = exclude_clip {
-        sqlx::query_as(
-            "SELECT l.name FROM labels l
-             LEFT JOIN clip_labels ct ON ct.label_id = l.id
-             WHERE l.id NOT IN (SELECT label_id FROM clip_labels WHERE clip_id = ?)
-             GROUP BY l.id
-             ORDER BY COALESCE(MAX(ct.added_at), '') DESC, l.name COLLATE NOCASE
-             LIMIT 10",
-        )
-        .bind(clip_id)
-        .fetch_all(&state.pool)
-        .await?
-    } else {
-        sqlx::query_as(
-            "SELECT l.name FROM labels l
-             LEFT JOIN clip_labels ct ON ct.label_id = l.id
-             GROUP BY l.id
-             ORDER BY COALESCE(MAX(ct.added_at), '') DESC, l.name COLLATE NOCASE
-             LIMIT 10",
-        )
-        .fetch_all(&state.pool)
-        .await?
-    };
-    Ok(rows.into_iter().map(|(n,)| n).collect())
-}
-
-/// Lower-kebab-case validator. Allows any Unicode lowercase letter
-/// (so å, ä, é, ü, ñ etc. work), ASCII digits, and hyphens. No
-/// leading/trailing/consecutive hyphens. Caller is expected to have
-/// already lowercased the input.
-pub fn is_valid_label(s: &str) -> bool {
-    if s.is_empty() {
-        return false;
-    }
-    let mut prev_was_dash = false;
-    let mut first = true;
-    let mut last_char = '\0';
-    for c in s.chars() {
-        let is_letter = c.is_alphabetic() && c.is_lowercase();
-        let is_digit = c.is_ascii_digit();
-        let is_dash = c == '-';
-        if !(is_letter || is_digit || is_dash) {
-            return false;
-        }
-        if is_dash {
-            if first || prev_was_dash {
-                return false;
-            }
-            prev_was_dash = true;
-        } else {
-            prev_was_dash = false;
-        }
-        first = false;
-        last_char = c;
-    }
-    last_char != '-'
 }
 
 // ---------------------------------------------------------------------------
@@ -283,12 +146,29 @@ pub struct WikiRequest {
 
 /// Resolve a label id to its canonical name, 404 if it doesn't exist.
 async fn label_name(state: &AppState, label_id: i64) -> AppResult<String> {
-    sqlx::query_as::<_, (String,)>("SELECT name FROM labels WHERE id = ?")
-        .bind(label_id)
-        .fetch_optional(&state.pool)
+    queries::labels::name_of(&state.pool, label_id)
         .await?
-        .map(|(n,)| n)
         .ok_or(AppError::NotFound)
+}
+
+/// A stored wiki page in the shape the frontend expects: rendered HTML
+/// alongside the source, and the "edited by … on …" line already
+/// assembled, since that sentence is the web's wording.
+fn wiki_props(page: queries::wiki::Page) -> WikiPage {
+    WikiPage {
+        label_id: page.label_id,
+        label_name: page.label_name,
+        content_html: markdown::render(&page.content),
+        content: page.content,
+        has_content: page.has_content,
+        last_edited: page.last_edited.map(|e| {
+            format!(
+                "edited by {} on {}",
+                e.author,
+                datefmt::datetime_from_rfc3339(&e.edited_at)
+            )
+        }),
+    }
 }
 
 /// Load a label's current wiki page, in both source and rendered form.
@@ -297,37 +177,9 @@ pub(crate) async fn load_wiki_page(
     label_id: i64,
     label_name: &str,
 ) -> AppResult<WikiPage> {
-    let latest: Option<(String, String, String)> = sqlx::query_as(
-        "SELECT r.content, u.username, r.edited_at
-         FROM label_wiki_revisions r JOIN users u ON u.id = r.edited_by
-         WHERE r.label_id = ?
-         ORDER BY r.id DESC LIMIT 1",
-    )
-    .bind(label_id)
-    .fetch_optional(&state.pool)
-    .await?;
-
-    Ok(match latest {
-        Some((content, author, edited_at)) => WikiPage {
-            label_id,
-            label_name: label_name.to_string(),
-            content_html: markdown::render(&content),
-            content,
-            has_content: true,
-            last_edited: Some(format!(
-                "edited by {author} on {}",
-                datefmt::datetime_from_rfc3339(&edited_at)
-            )),
-        },
-        None => WikiPage {
-            label_id,
-            label_name: label_name.to_string(),
-            content: String::new(),
-            content_html: String::new(),
-            has_content: false,
-            last_edited: None,
-        },
-    })
+    Ok(wiki_props(
+        queries::wiki::page(&state.pool, label_id, label_name).await?,
+    ))
 }
 
 /// The wiki page for each active filter label that exists, in the given
@@ -336,15 +188,10 @@ pub(crate) async fn load_wiki_page(
 pub(crate) async fn active_wikis(state: &AppState, active: &[&str]) -> AppResult<Vec<WikiPage>> {
     let mut out = Vec::new();
     for name in active {
-        let row: Option<(i64, String)> =
-            sqlx::query_as("SELECT id, name FROM labels WHERE name = ? COLLATE NOCASE")
-                .bind(name)
-                .fetch_optional(&state.pool)
-                .await?;
-        let Some((label_id, canonical)) = row else {
+        let Some(label) = queries::labels::find_by_name(&state.pool, name).await? else {
             continue;
         };
-        out.push(load_wiki_page(state, label_id, &canonical).await?);
+        out.push(load_wiki_page(state, label.id, &label.name).await?);
     }
     Ok(out)
 }
@@ -352,7 +199,7 @@ pub(crate) async fn active_wikis(state: &AppState, active: &[&str]) -> AppResult
 /// GET /api/labels/{id}/wiki — a label's current wiki page.
 pub async fn wiki_view(
     State(state): State<AppState>,
-    _user: CurrentUserApi,
+    _user: ApiUser,
     AxumPath(label_id): AxumPath<i64>,
 ) -> AppResult<Response> {
     let name = label_name(&state, label_id).await?;
@@ -363,7 +210,7 @@ pub async fn wiki_view(
 /// it now stands.
 pub async fn wiki_save(
     State(state): State<AppState>,
-    CurrentUserApi(user): CurrentUserApi,
+    ApiUser { user, .. }: ApiUser,
     AxumPath(label_id): AxumPath<i64>,
     Json(req): Json<WikiRequest>,
 ) -> AppResult<Response> {
@@ -373,7 +220,7 @@ pub async fn wiki_save(
             "wiki page exceeds {MAX_WIKI_BYTES}-byte limit"
         )));
     }
-    insert_revision(&state, label_id, &req.content, user.id).await?;
+    queries::wiki::save(&state.pool, label_id, &req.content, user.id).await?;
     state.discord.wiki_edited(&user.username, &name);
     Ok(Json(load_wiki_page(&state, label_id, &name).await?).into_response())
 }
@@ -386,25 +233,15 @@ pub async fn wiki_history(
     AxumPath(label_id): AxumPath<i64>,
 ) -> AppResult<Response> {
     let name = label_name(&state, label_id).await?;
-    let rows: Vec<(i64, String, String, String)> = sqlx::query_as(
-        "SELECT r.id, u.username, r.edited_at, r.content
-         FROM label_wiki_revisions r JOIN users u ON u.id = r.edited_by
-         WHERE r.label_id = ?
-         ORDER BY r.id DESC",
-    )
-    .bind(label_id)
-    .fetch_all(&state.pool)
-    .await?;
-
-    let revisions: Vec<WikiRevision> = rows
+    let revisions: Vec<WikiRevision> = queries::wiki::history(&state.pool, label_id)
+        .await?
         .into_iter()
-        .enumerate()
-        .map(|(i, (id, author, edited_at, content))| WikiRevision {
-            id,
-            author,
-            edited_at: datefmt::datetime_from_rfc3339(&edited_at),
-            content_html: markdown::render(&content),
-            is_current: i == 0, // newest first
+        .map(|r| WikiRevision {
+            id: r.id,
+            author: r.author,
+            edited_at: datefmt::datetime_from_rfc3339(&r.edited_at),
+            content_html: markdown::render(&r.content),
+            is_current: r.is_current,
         })
         .collect();
 
@@ -428,65 +265,17 @@ pub async fn wiki_history(
 /// see it.
 pub async fn wiki_restore(
     State(state): State<AppState>,
-    CurrentUserApi(user): CurrentUserApi,
+    ApiUser { user, .. }: ApiUser,
     AxumPath((label_id, rev_id)): AxumPath<(i64, i64)>,
 ) -> AppResult<Response> {
-    // Scope the lookup to this label so a mismatched id can't pull in
+    // Scoped to this label, so a mismatched pair of ids cannot pull in
     // another label's content.
-    let content: Option<(String,)> =
-        sqlx::query_as("SELECT content FROM label_wiki_revisions WHERE id = ? AND label_id = ?")
-            .bind(rev_id)
-            .bind(label_id)
-            .fetch_optional(&state.pool)
-            .await?;
-    let content = content.map(|(c,)| c).ok_or(AppError::NotFound)?;
+    let content = queries::wiki::revision_content(&state.pool, label_id, rev_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
 
-    insert_revision(&state, label_id, &content, user.id).await?;
+    queries::wiki::save(&state.pool, label_id, &content, user.id).await?;
     let name = label_name(&state, label_id).await?;
     state.discord.wiki_edited(&user.username, &name);
     Ok(StatusCode::NO_CONTENT.into_response())
-}
-
-async fn insert_revision(
-    state: &AppState,
-    label_id: i64,
-    content: &str,
-    user_id: i64,
-) -> AppResult<()> {
-    sqlx::query("INSERT INTO label_wiki_revisions (label_id, content, edited_by) VALUES (?, ?, ?)")
-        .bind(label_id)
-        .bind(content)
-        .bind(user_id)
-        .execute(&state.pool)
-        .await?;
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::is_valid_label;
-
-    #[test]
-    fn accepts_kebab_case_with_diacritics() {
-        for s in [
-            "verse",
-            "verse-1",
-            "verse-one",
-            "pålägg",
-            "café-version",
-            "über-mix",
-            "x",
-        ] {
-            assert!(is_valid_label(s), "expected valid: {s}");
-        }
-    }
-
-    #[test]
-    fn rejects_bad_shapes() {
-        for s in [
-            "", "-verse", "verse-", "verse--1", "Verse", "verse 1", "verse_1", "verse.1",
-        ] {
-            assert!(!is_valid_label(s), "expected invalid: {s}");
-        }
-    }
 }

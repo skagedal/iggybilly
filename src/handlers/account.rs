@@ -51,28 +51,7 @@ pub async fn change_password(
     session: Session,
     Json(req): Json<ChangePasswordRequest>,
 ) -> AppResult<Response> {
-    if req.new_password.len() < 10 {
-        return Err(AppError::BadRequest(
-            "New password must be at least 10 characters.".into(),
-        ));
-    }
-
-    let stored: (String,) = sqlx::query_as("SELECT password_hash FROM users WHERE id = ?")
-        .bind(user.id)
-        .fetch_one(&state.pool)
-        .await?;
-    if !auth::verify_password(&req.current_password, &stored.0) {
-        return Err(AppError::BadRequest(
-            "Current password is incorrect.".into(),
-        ));
-    }
-
-    let new_hash = auth::hash_password(&req.new_password).map_err(AppError::Other)?;
-    sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
-        .bind(&new_hash)
-        .bind(user.id)
-        .execute(&state.pool)
-        .await?;
+    set_password(&state, user.id, &req.current_password, &req.new_password).await?;
 
     // Rotate the session id: if the user is changing their password
     // because they fear compromise, the old cookie shouldn't keep
@@ -80,4 +59,45 @@ pub async fn change_password(
     session.cycle_id().await?;
 
     Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// Check the current password and set a new one.
+///
+/// Also drops every app token the user has. Changing a password is what
+/// you do when you think someone else might have it, and a signed-in app
+/// on a phone you no longer hold is exactly the access you were trying
+/// to end. Both callers sign the caller back in afterwards — the browser
+/// keeps its (rotated) session, the app is handed a fresh token.
+pub(crate) async fn set_password(
+    state: &AppState,
+    user_id: i64,
+    current_password: &str,
+    new_password: &str,
+) -> AppResult<()> {
+    if new_password.len() < 10 {
+        return Err(AppError::BadRequest(
+            "New password must be at least 10 characters.".into(),
+        ));
+    }
+
+    let stored: (String,) = sqlx::query_as("SELECT password_hash FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_one(&state.pool)
+        .await?;
+    if !auth::verify_password(current_password, &stored.0) {
+        return Err(AppError::BadRequest(
+            "Current password is incorrect.".into(),
+        ));
+    }
+
+    let new_hash = auth::hash_password(new_password).map_err(AppError::Other)?;
+    sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+        .bind(&new_hash)
+        .bind(user_id)
+        .execute(&state.pool)
+        .await?;
+
+    crate::tokens::revoke_all(&state.pool, user_id).await?;
+
+    Ok(())
 }

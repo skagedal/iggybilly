@@ -10,3 +10,7 @@
 # bundles esbuild writes there — build it with `pnpm run build` in web/.
 /static
 /web/node_modules
+
+# Whose phone and whose Apple team. Symlink your own in; see
+# local/device.env.example.
+/local/device.env

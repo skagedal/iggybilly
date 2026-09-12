@@ -3,6 +3,7 @@
 //! module structure is just exposed so `tests/integration.rs` can call
 //! `iggybilly::web::build_app`, `iggybilly::db::connect`, etc.
 
+pub mod api;
 pub mod assets;
 pub mod audio;
 pub mod auth;
@@ -15,4 +16,6 @@ pub mod error;
 pub mod handlers;
 pub mod markdown;
 pub mod models;
+pub mod queries;
+pub mod tokens;
 pub mod web;

@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Attach the built APK to the GitHub release for $GITHUB_REF_NAME,
+# creating that release if the tag has none yet. The release is what
+# people download from: a public URL, no account, no install of anything
+# else first.
+#
+# Creating and uploading are separate so that re-running a failed job
+# does the right thing rather than falling over an existing release.
+set -euo pipefail
+
+: "${GITHUB_REF_NAME:?not set; this runs on a tag push}"
+: "${VERSION:?not set; the workflow derives it from the tag}"
+: "${RUNNER_TEMP:?not set. This runs on a GitHub runner, not here.}"
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+built="$root/mobile/build/app/outputs/flutter-apk/app-release.apk"
+tag="$GITHUB_REF_NAME"
+
+[ -f "$built" ] || {
+    echo "publish-apk: the build produced no $built" >&2
+    exit 1
+}
+
+# Named for the version, because it is downloaded to a phone's Downloads
+# folder and sits there next to every other app-release.apk in the world.
+apk="$RUNNER_TEMP/iggybilly-$VERSION.apk"
+cp "$built" "$apk"
+
+if ! gh release view "$tag" >/dev/null 2>&1; then
+    gh release create "$tag" --title "$tag" --generate-notes
+fi
+
+gh release upload "$tag" "$apk" --clobber

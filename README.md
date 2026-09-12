@@ -262,3 +262,8 @@ whatever channel you'd send a password.
   cluster-admin one used by skagedal.tech, blogdans, and bonband —
   copy the value across repos rather than minting a new namespace-
   scoped token.
+- The phone apps ship on a version tag instead of on push: `git tag
+  v0.2.0 && git push origin v0.2.0` puts the Android APK on that tag's
+  GitHub release and sends the iOS build to TestFlight. It has secrets
+  and one-time setup of its own — see "Releasing" in
+  [`mobile/README.md`](mobile/README.md).

@@ -24,6 +24,12 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<!-- The only encryption here is HTTPS through the system's own TLS,
+	     which is exempt. Answering it once in the build stops every
+	     TestFlight upload waiting on the same question in App Store
+	     Connect before testers can install it. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<!-- Cleartext to local-network addresses only, which is what reaching

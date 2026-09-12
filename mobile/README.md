@@ -139,9 +139,9 @@ address the app cannot.
 
 ## Releasing
 
-Push a version tag and both apps ship from that commit:
+Push a `mobile-` tag and both apps ship from that commit:
 
-    git tag v0.2.0 && git push origin v0.2.0
+    git tag mobile-0.2.0 && git push origin mobile-0.2.0
 
 `.github/workflows/release.yml` builds the Android APK and attaches it to
 the tag's GitHub release, where anyone can download it without an account
@@ -150,9 +150,12 @@ or an app store, and builds the iOS app and uploads it to TestFlight.
 The tag is the only place the version is written. `--build-name` comes
 from the tag and `--build-number` from the run, so a release needs no
 commit of its own and `pubspec.yaml`'s version is only what a local build
-gets. A tag must be `v` and one to three integers: the workflow refuses
-anything else up front, because App Store Connect would refuse it at the
-end of a long build.
+gets. A tag must be `mobile-` and one to three integers: the workflow
+refuses anything else up front, because App Store Connect would refuse it
+at the end of a long build. The prefix is the point of the name — the
+server and the frontend ship from `main` on every push and carry no
+version of their own, so an unprefixed tag would look like it spoke for
+the whole repository.
 
 The two jobs are independent, so the APK is published even when the Apple
 side fails, and the other way round.

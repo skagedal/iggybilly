@@ -27,7 +27,11 @@ apk="$RUNNER_TEMP/iggybilly-$VERSION.apk"
 cp "$built" "$apk"
 
 if ! gh release view "$tag" >/dev/null 2>&1; then
-    gh release create "$tag" --title "$tag" --generate-notes
+    # Titled for the people who land on the page to download an APK,
+    # rather than for the tag scheme they have no reason to know.
+    gh release create "$tag" \
+        --title "iggybilly for phones $VERSION" \
+        --generate-notes
 fi
 
 gh release upload "$tag" "$apk" --clobber

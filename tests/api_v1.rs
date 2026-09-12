@@ -656,3 +656,85 @@ async fn label_search_offers_creation_only_for_a_valid_new_name() {
     let (_, s) = get(&srv, &c, &token, "/api/v1/labels/search?q=not%20valid").await;
     assert_eq!(s["canCreate"], false, "a name with a space is not offered");
 }
+
+/// The playlist is its own route, and the clip list is deliberately
+/// untouched by it: an app that hasn't been updated must keep seeing the
+/// array it has always seen.
+#[tokio::test]
+async fn a_label_has_a_playlist_route_that_reorders() {
+    let srv = start().await;
+    let (c, token) = signed_in(&srv).await;
+    let ids = upload(&srv, &c, &token, &["one.mp3", "two.mp3", "three.mp3"]).await;
+    for id in &ids {
+        let r = c
+            .post(format!("{}/api/v1/clips/{id}/labels", srv.base))
+            .bearer_auth(&token)
+            .json(&serde_json::json!({ "name": "set" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 200);
+    }
+    let (label_id,): (i64,) = sqlx::query_as("SELECT id FROM labels WHERE name = 'set'")
+        .fetch_one(&srv.pool)
+        .await
+        .unwrap();
+
+    let listed = |body: &serde_json::Value| -> Vec<i64> {
+        body["clips"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|clip| clip["id"].as_i64().unwrap())
+            .collect()
+    };
+
+    let (status, body) = get(
+        &srv,
+        &c,
+        &token,
+        &format!("/api/v1/labels/{label_id}/playlist"),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(body["labelName"], "set");
+    assert_eq!(
+        listed(&body),
+        ids,
+        "labelled oldest first, so listed that way"
+    );
+    assert!(
+        body["clips"][0]["audioUrl"].is_string(),
+        "the clips come in the shape /api/v1/clips sends them"
+    );
+
+    let r = c
+        .post(format!("{}/api/v1/labels/{label_id}/order", srv.base))
+        .bearer_auth(&token)
+        .json(&serde_json::json!({ "clipId": ids[2], "afterClipId": null }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let moved: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(moved["order"], serde_json::json!([ids[2], ids[0], ids[1]]));
+
+    let (_, body) = get(
+        &srv,
+        &c,
+        &token,
+        &format!("/api/v1/labels/{label_id}/playlist"),
+    )
+    .await;
+    assert_eq!(listed(&body), vec![ids[2], ids[0], ids[1]]);
+
+    // The plain clip list is still newest-upload-first, and still an array.
+    let (_, clips) = get(&srv, &c, &token, "/api/v1/clips?label=set").await;
+    let plain: Vec<i64> = clips
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|clip| clip["id"].as_i64().unwrap())
+        .collect();
+    assert_eq!(plain, vec![ids[2], ids[1], ids[0]]);
+}

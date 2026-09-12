@@ -866,3 +866,291 @@ async fn editing_a_wiki_posts_to_discord() {
         "links the wiki view: {content}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Playlists
+// ---------------------------------------------------------------------------
+//
+// A label's clips are a playlist, and the order lives on the membership
+// row rather than on the clip — so these tests care about two things:
+// what the list comes back as, and that a move under one label leaves
+// the same clip's place under another alone.
+
+async fn label_id(srv: &Server, name: &str) -> i64 {
+    let (id,): (i64,) = sqlx::query_as("SELECT id FROM labels WHERE name = ?")
+        .bind(name)
+        .fetch_one(&srv.pool)
+        .await
+        .unwrap();
+    id
+}
+
+/// The clip ids a page lists, in the order it lists them.
+async fn listed_ids(srv: &Server, c: &reqwest::Client, path: &str) -> Vec<i64> {
+    get_props(srv, c, path).await["clips"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|clip| clip["id"].as_i64().unwrap())
+        .collect()
+}
+
+/// Move a clip behind another — or to the front, with `None` — and
+/// return the order the server answers with.
+async fn reorder(
+    srv: &Server,
+    c: &reqwest::Client,
+    label: i64,
+    clip_id: i64,
+    after_clip_id: Option<i64>,
+) -> Vec<i64> {
+    let r = c
+        .post(format!("{}/api/labels/{label}/order", srv.base))
+        .json(&serde_json::json!({ "clipId": clip_id, "afterClipId": after_clip_id }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200, "reorder should succeed");
+    let body: serde_json::Value = r.json().await.unwrap();
+    body["order"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_i64().unwrap())
+        .collect()
+}
+
+async fn positions(srv: &Server, label: i64) -> Vec<(i64, i64)> {
+    sqlx::query_as(
+        "SELECT clip_id, position FROM clip_labels WHERE label_id = ? ORDER BY position, clip_id",
+    )
+    .bind(label)
+    .fetch_all(&srv.pool)
+    .await
+    .unwrap()
+}
+
+/// Three clips, all carrying `name`, labelled oldest first — so the
+/// playlist starts as 1, 2, 3 while the unfiltered list is 3, 2, 1.
+async fn playlist_of_three(srv: &Server, c: &reqwest::Client, name: &str) -> i64 {
+    upload_many(srv, c, &["one.mp3", "two.mp3", "three.mp3"]).await;
+    for clip in 1..=3 {
+        add_label(srv, c, clip, name).await;
+    }
+    label_id(srv, name).await
+}
+
+/// The migration's backfill statement, read out of the file that ships
+/// it so the test exercises the real SQL rather than a copy.
+fn backfill_sql() -> String {
+    let src = include_str!("../migrations/0005_playlist_order.sql");
+    let start = src
+        .find("UPDATE clip_labels")
+        .expect("a backfill statement");
+    let end = start + src[start..].find(';').expect("terminated") + 1;
+    src[start..end].to_string()
+}
+
+#[tokio::test]
+async fn the_backfill_orders_existing_memberships_newest_upload_first() {
+    let srv = start().await;
+    create_user(&srv.pool, "alice", "pw").await;
+    let c = client();
+    login(&srv, &c, "alice", "pw").await;
+    let label = playlist_of_three(&srv, &c, "set").await;
+
+    // Rows written before the migration carry the column's default, so
+    // put them all back to 0 and run the shipped backfill over them.
+    sqlx::query("UPDATE clip_labels SET position = 0")
+        .execute(&srv.pool)
+        .await
+        .unwrap();
+    sqlx::query(&backfill_sql())
+        .execute(&srv.pool)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        listed_ids(&srv, &c, "/?label=set").await,
+        vec![3, 2, 1],
+        "the day it ships, the playlist is the list people already saw"
+    );
+    assert_eq!(
+        positions(&srv, label).await,
+        vec![(3, 0), (2, 1024), (1, 2048)],
+        "and the backfilled positions are a gap apart"
+    );
+}
+
+#[tokio::test]
+async fn a_playlist_lists_in_its_own_order_and_a_clip_moves_to_the_front() {
+    let srv = start().await;
+    create_user(&srv.pool, "alice", "pw").await;
+    let c = client();
+    login(&srv, &c, "alice", "pw").await;
+    let label = playlist_of_three(&srv, &c, "set").await;
+
+    // A newly labelled clip lands at the end, so the playlist is the
+    // order they were labelled in — not the reverse-chronological list.
+    assert_eq!(listed_ids(&srv, &c, "/?label=set").await, vec![1, 2, 3]);
+    assert_eq!(listed_ids(&srv, &c, "/").await, vec![3, 2, 1]);
+
+    let props = get_props(&srv, &c, "/?label=set").await;
+    assert_eq!(props["playlist"]["labelId"], label);
+    assert_eq!(props["playlist"]["labelName"], "set");
+
+    assert_eq!(reorder(&srv, &c, label, 3, None).await, vec![3, 1, 2]);
+    assert_eq!(listed_ids(&srv, &c, "/?label=set").await, vec![3, 1, 2]);
+    // One row written: the two it was dropped in front of are untouched.
+    assert_eq!(
+        positions(&srv, label).await,
+        vec![(3, -1024), (1, 0), (2, 1024)]
+    );
+}
+
+#[tokio::test]
+async fn a_clip_moves_to_the_end_of_a_playlist() {
+    let srv = start().await;
+    create_user(&srv.pool, "alice", "pw").await;
+    let c = client();
+    login(&srv, &c, "alice", "pw").await;
+    let label = playlist_of_three(&srv, &c, "set").await;
+
+    assert_eq!(reorder(&srv, &c, label, 1, Some(3)).await, vec![2, 3, 1]);
+    assert_eq!(listed_ids(&srv, &c, "/?label=set").await, vec![2, 3, 1]);
+    assert_eq!(
+        positions(&srv, label).await,
+        vec![(2, 1024), (3, 2048), (1, 3072)]
+    );
+}
+
+#[tokio::test]
+async fn a_used_up_gap_renumbers_the_whole_label() {
+    let srv = start().await;
+    create_user(&srv.pool, "alice", "pw").await;
+    let c = client();
+    login(&srv, &c, "alice", "pw").await;
+    let label = playlist_of_three(&srv, &c, "set").await;
+
+    // Squeeze clips 1 and 2 together, as a long run of drags into the
+    // same gap eventually would.
+    for (clip, position) in [(1, 0), (2, 1), (3, 2048)] {
+        sqlx::query("UPDATE clip_labels SET position = ? WHERE label_id = ? AND clip_id = ?")
+            .bind(position)
+            .bind(label)
+            .bind(clip)
+            .execute(&srv.pool)
+            .await
+            .unwrap();
+    }
+
+    // There is no room between 0 and 1, so the drop renumbers instead of
+    // failing — and the order it renumbers to is the order asked for.
+    assert_eq!(reorder(&srv, &c, label, 3, Some(1)).await, vec![1, 3, 2]);
+    assert_eq!(
+        positions(&srv, label).await,
+        vec![(1, 0), (3, 1024), (2, 2048)],
+        "every row of the label is spaced out again"
+    );
+    assert_eq!(listed_ids(&srv, &c, "/?label=set").await, vec![1, 3, 2]);
+}
+
+#[tokio::test]
+async fn moving_a_clip_in_one_playlist_leaves_its_other_playlists_alone() {
+    let srv = start().await;
+    create_user(&srv.pool, "alice", "pw").await;
+    let c = client();
+    login(&srv, &c, "alice", "pw").await;
+    let set = playlist_of_three(&srv, &c, "set").await;
+    // The same three clips in another playlist, labelled the other way
+    // round so the two orders can't agree by accident.
+    for clip in (1..=3).rev() {
+        add_label(&srv, &c, clip, "takes").await;
+    }
+    let takes = label_id(&srv, "takes").await;
+
+    assert_eq!(reorder(&srv, &c, set, 3, None).await, vec![3, 1, 2]);
+
+    assert_eq!(
+        positions(&srv, takes).await,
+        vec![(3, 0), (2, 1024), (1, 2048)],
+        "a clip's place is a property of the membership, not of the clip"
+    );
+    assert_eq!(listed_ids(&srv, &c, "/?label=takes").await, vec![3, 2, 1]);
+}
+
+#[tokio::test]
+async fn reordering_refuses_a_list_that_no_longer_exists() {
+    let srv = start().await;
+    create_user(&srv.pool, "alice", "pw").await;
+    let c = client();
+    login(&srv, &c, "alice", "pw").await;
+    let label = playlist_of_three(&srv, &c, "set").await;
+    upload_one(&srv, &c, "outsider.mp3").await;
+
+    let post = async |label: i64, body: serde_json::Value| {
+        c.post(format!("{}/api/labels/{label}/order", srv.base))
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
+            .status()
+    };
+
+    assert_eq!(
+        post(label, serde_json::json!({ "clipId": 4, "afterClipId": 1 })).await,
+        400,
+        "a clip that doesn't carry the label"
+    );
+    assert_eq!(
+        post(label, serde_json::json!({ "clipId": 1, "afterClipId": 4 })).await,
+        400,
+        "a neighbour that doesn't carry the label"
+    );
+    assert_eq!(
+        post(label, serde_json::json!({ "clipId": 1, "afterClipId": 1 })).await,
+        400,
+        "a clip moved after itself"
+    );
+    assert_eq!(
+        post(
+            9999,
+            serde_json::json!({ "clipId": 1, "afterClipId": null })
+        )
+        .await,
+        404,
+        "a label that doesn't exist"
+    );
+
+    assert_eq!(
+        listed_ids(&srv, &c, "/?label=set").await,
+        vec![1, 2, 3],
+        "and none of that moved anything"
+    );
+}
+
+#[tokio::test]
+async fn an_intersection_of_labels_stays_reverse_chronological() {
+    let srv = start().await;
+    create_user(&srv.pool, "alice", "pw").await;
+    let c = client();
+    login(&srv, &c, "alice", "pw").await;
+    let set = playlist_of_three(&srv, &c, "set").await;
+    for clip in 1..=3 {
+        add_label(&srv, &c, clip, "live").await;
+    }
+    reorder(&srv, &c, set, 3, None).await;
+
+    let props = get_props(&srv, &c, "/?label=set&label=live").await;
+    assert!(
+        props["playlist"].is_null(),
+        "two filters is an intersection, and an intersection has no order"
+    );
+    let ids: Vec<i64> = props["clips"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|clip| clip["id"].as_i64().unwrap())
+        .collect();
+    assert_eq!(ids, vec![3, 2, 1]);
+}

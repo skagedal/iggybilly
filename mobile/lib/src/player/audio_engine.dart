@@ -26,8 +26,9 @@ abstract class AudioEngine {
   /// The platform's own looping, not a seek on completion: on Android,
   /// iOS and macOS it is gapless, and a bar-length riff played twice with
   /// a hole in the middle is not the same thing as a bar-length riff
-  /// played twice.
-  Future<void> setRepeat(bool repeat);
+  /// played twice. Not the repeat toggle itself: a queue of several clips
+  /// repeats by advancing, and [PlayerController] decides which applies.
+  Future<void> setLoopCurrent(bool loop);
 
   /// Where playback has got to. Emits often enough to move a bar.
   Stream<Duration> get positions;
@@ -153,8 +154,8 @@ class JustAudioEngine implements AudioEngine {
   }
 
   @override
-  Future<void> setRepeat(bool repeat) =>
-      _player.setLoopMode(repeat ? LoopMode.one : LoopMode.off);
+  Future<void> setLoopCurrent(bool loop) =>
+      _player.setLoopMode(loop ? LoopMode.one : LoopMode.off);
 
   @override
   Stream<Duration> get positions => _player.positionStream;

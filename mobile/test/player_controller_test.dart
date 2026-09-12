@@ -38,7 +38,7 @@ class FakeEngine implements AudioEngine {
   Completer<void>? gate;
 
   /// What the platform was last told about looping.
-  bool repeat = false;
+  bool loop = false;
 
   @override
   Future<Duration?> load(Uri url, {Map<String, String> headers = const {}}) async {
@@ -69,7 +69,7 @@ class FakeEngine implements AudioEngine {
   Future<void> seek(Duration position) async => lastSeek = position;
 
   @override
-  Future<void> setRepeat(bool value) async => repeat = value;
+  Future<void> setLoopCurrent(bool value) async => loop = value;
 
   @override
   Future<void> stop() async => stopped = true;
@@ -338,14 +338,15 @@ void main() {
     final controller = PlayerController(engine: engine, settings: settings);
     addTearDown(controller.dispose);
 
+    await controller.play(clipFixture(), Uri.parse('https://e.test/1'));
     await controller.setRepeat(true);
     expect(controller.repeat, isTrue);
-    expect(engine.repeat, isTrue, reason: 'the platform loops it, gaplessly');
+    expect(engine.loop, isTrue, reason: 'the platform loops it, gaplessly');
     expect(settings.repeat, isTrue);
 
     await controller.toggleRepeat();
     expect(controller.repeat, isFalse);
-    expect(engine.repeat, isFalse);
+    expect(engine.loop, isFalse);
     expect(settings.repeat, isFalse);
   });
 
@@ -357,9 +358,11 @@ void main() {
     addTearDown(controller.dispose);
 
     await controller.restore();
-
     expect(controller.repeat, isTrue);
-    expect(engine.repeat, isTrue);
+
+    await controller.play(clipFixture(), Uri.parse('https://e.test/1'));
+    await pumpEventQueue();
+    expect(engine.loop, isTrue);
   });
 
   test('reaching the end with repeat on starts the clip again', () async {
@@ -412,5 +415,153 @@ void main() {
   test('skipping is ignored with nothing loaded', () async {
     await player.skip(const Duration(seconds: 10));
     expect(engine.lastSeek, isNull);
+  });
+
+  group('a queue', () {
+    Uri urlFor(Clip c) => Uri.parse('https://e.test/${c.id}');
+    final set = [
+      clipFixture(id: 1, name: 'intro'),
+      clipFixture(id: 2, name: 'verse'),
+      clipFixture(id: 3, name: 'outro'),
+    ];
+
+    Future<void> finish() async {
+      engine.completionController.add(null);
+      await pumpEventQueue();
+    }
+
+    test('starts where play was pressed and advances at the end of a clip',
+        () async {
+      await player.playQueue(set, 2, source: 'set', urlFor: urlFor);
+      expect(player.clip!.id, 2);
+      expect(player.queueSource, 'set');
+      expect(player.queueIndex, 1);
+
+      await finish();
+      expect(player.clip!.id, 3);
+      expect(engine.loaded.last.toString(), 'https://e.test/3');
+    });
+
+    test('stops wound back after the last clip when repeat is off', () async {
+      await player.playQueue(set, 3, source: 'set', urlFor: urlFor);
+      await pumpEventQueue();
+      await finish();
+
+      expect(player.clip!.id, 3, reason: 'the last clip stays loaded');
+      expect(player.isPlaying, isFalse);
+      expect(engine.loaded.length, 1);
+    });
+
+    test('wraps to the first clip when repeat is on', () async {
+      await player.setRepeat(true);
+      await player.playQueue(set, 3, source: 'set', urlFor: urlFor);
+      await finish();
+      expect(player.clip!.id, 1);
+    });
+
+    test('loops a queue of one on the platform, and stops once it grows',
+        () async {
+      await player.setRepeat(true);
+      await player.play(clipFixture(id: 1), urlFor(clipFixture(id: 1)));
+      await pumpEventQueue();
+      expect(engine.loop, isTrue, reason: 'a lone clip loops gaplessly');
+
+      await player.playQueue([set.first], 1, source: 'set', urlFor: urlFor);
+      await pumpEventQueue();
+      expect(engine.loop, isTrue, reason: 'a playlist of one is a lone clip');
+
+      await player.setQueueTracks('set', set);
+      expect(engine.loop, isFalse, reason: 'a playlist wraps by advancing');
+
+      await player.setQueueTracks('set', [set.first]);
+      expect(engine.loop, isTrue);
+    });
+
+    test('next and previous move through it; previous late in a clip restarts',
+        () async {
+      await player.playQueue(set, 1, source: 'set', urlFor: urlFor);
+      await player.next();
+      expect(player.clip!.id, 2);
+
+      engine.positionController.add(const Duration(seconds: 1));
+      await pumpEventQueue();
+      await player.previous();
+      expect(player.clip!.id, 1, reason: 'early in a clip goes back');
+
+      engine.positionController.add(const Duration(seconds: 8));
+      await pumpEventQueue();
+      await player.previous();
+      expect(player.clip!.id, 1);
+      expect(engine.lastSeek, Duration.zero, reason: 'late restarts it');
+    });
+
+    test('next on the last clip wraps only with repeat on', () async {
+      await player.playQueue(set, 3, source: 'set', urlFor: urlFor);
+      await player.next();
+      expect(player.clip!.id, 3);
+      expect(engine.lastSeek, Duration.zero);
+
+      await player.setRepeat(true);
+      await player.next();
+      expect(player.clip!.id, 1);
+    });
+
+    test('a reorder under a playing queue leaves the playing clip alone',
+        () async {
+      await player.playQueue(set, 2, source: 'set', urlFor: urlFor);
+      final loads = engine.loaded.length;
+
+      await player.setQueueTracks('set', [set[1], set[2], set[0]]);
+      expect(player.clip!.id, 2);
+      expect(player.queueIndex, 0);
+      expect(engine.loaded.length, loads, reason: 'nothing reloads');
+
+      await finish();
+      expect(player.clip!.id, 3, reason: 'next is what follows it now');
+    });
+
+    test("another label's reorder does not touch it", () async {
+      await player.playQueue(set, 1, source: 'set', urlFor: urlFor);
+      await player.setQueueTracks('other', [set[2]]);
+      expect(player.queue.length, 3);
+    });
+
+    test('the playing clip leaving the list plays on, and the queue '
+        'continues from where it was', () async {
+      await player.playQueue(set, 2, source: 'set', urlFor: urlFor);
+      await player.setQueueTracks('set', [set[0], set[2]]);
+
+      expect(player.clip!.id, 2, reason: 'it finishes');
+      expect(player.queueIndex, -1);
+
+      await finish();
+      expect(player.clip!.id, 3);
+    });
+
+    test('a clip that will not load is skipped', () async {
+      engine.loadErrorFor = (url) =>
+          url.path.endsWith('/2') ? Exception('gone') : null;
+      await player.playQueue(set, 1, source: 'set', urlFor: urlFor);
+      await finish();
+
+      expect(player.clip!.id, 3);
+      expect(player.error, isNull);
+    });
+
+    test('a whole pass of failures stops with the error', () async {
+      engine.loadError = Exception('the server is gone');
+      await player.setRepeat(true);
+      await player.playQueue(set, 1, source: 'set', urlFor: urlFor);
+
+      expect(player.clip, isNull);
+      expect(player.error, isNotNull);
+    });
+
+    test('stopping forgets it', () async {
+      await player.playQueue(set, 1, source: 'set', urlFor: urlFor);
+      await player.stop();
+      expect(player.queue, isEmpty);
+      expect(player.queueSource, isNull);
+    });
   });
 }

@@ -26,6 +26,37 @@ class Label {
   int get hashCode => Object.hash(id, name);
 }
 
+/// A label's clips as a playlist, in the order the band put them in.
+class Playlist {
+  const Playlist({
+    required this.labelId,
+    required this.labelName,
+    required this.total,
+    required this.clips,
+  });
+
+  factory Playlist.fromJson(Map<String, dynamic> json) {
+    final seconds = json['totalSeconds'];
+    return Playlist(
+      labelId: json['labelId'] as int,
+      labelName: json['labelName'] as String,
+      total: Duration(
+        microseconds: ((seconds is num ? seconds : 0) * 1000000).round(),
+      ),
+      clips: ((json['clips'] as List<dynamic>?) ?? const [])
+          .map((c) => Clip.fromJson(c as Map<String, dynamic>))
+          .toList(growable: false),
+    );
+  }
+
+  final int labelId;
+  final String labelName;
+
+  /// Summed over the clips whose length is known.
+  final Duration total;
+  final List<Clip> clips;
+}
+
 /// One audio clip.
 class Clip {
   const Clip({

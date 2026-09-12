@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/gestures.dart' show kLongPressTimeout;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -36,6 +37,32 @@ class FakeServer {
   final Map<int, List<Map<String, dynamic>>> labels = {};
 
   late final FakeHttpClient client = FakeHttpClient(_respond);
+
+  /// Playlist orders that have been dragged into, by label id. A label
+  /// nobody has reordered is in list order.
+  final Map<int, List<int>> orders = {};
+
+  /// Set to answer every reorder with a 400, as a stale list gets.
+  bool refuseOrder = false;
+
+  List<int> playlistOrder(int labelId) {
+    final carrying = [
+      for (final c in clips)
+        if ((c['labels'] as List).any((l) => (l as Map)['id'] == labelId))
+          c['id'] as int,
+    ];
+    final dragged = orders[labelId];
+    if (dragged == null) return carrying;
+    return [
+      ...dragged.where(carrying.contains),
+      ...carrying.where((id) => !dragged.contains(id)),
+    ];
+  }
+
+  String _labelName(int labelId) => clips
+      .expand((c) => c['labels'] as List)
+      .cast<Map>()
+      .firstWhere((l) => l['id'] == labelId)['name'] as String;
 
   http.Response _respond(http.Request request) {
     seen.add(request);
@@ -81,6 +108,36 @@ class FakeServer {
       list.add({'id': 99, 'name': name.toLowerCase()});
       clips.firstWhere((c) => c['id'] == id)['labels'] = list;
       return ok(list);
+    }
+
+    final playlistMatch =
+        RegExp(r'^/api/v1/labels/(\d+)/playlist$').firstMatch(path);
+    if (playlistMatch != null) {
+      final id = int.parse(playlistMatch.group(1)!);
+      final carrying = [
+        for (final id in playlistOrder(id))
+          clips.firstWhere((c) => c['id'] == id),
+      ];
+      return ok({
+        'labelId': id,
+        'labelName': _labelName(id),
+        'totalSeconds': carrying.fold<double>(
+            0, (sum, c) => sum + ((c['durationSeconds'] as num?) ?? 0)),
+        'clips': carrying,
+      });
+    }
+
+    final orderMatch = RegExp(r'^/api/v1/labels/(\d+)/order$').firstMatch(path);
+    if (orderMatch != null) {
+      if (refuseOrder) return fails(400, 'That clip is not in this playlist.');
+      final id = int.parse(orderMatch.group(1)!);
+      final body = jsonDecode(request.body) as Map;
+      final order = playlistOrder(id)..remove(body['clipId']);
+      final after = body['afterClipId'] as int?;
+      order.insert(after == null ? 0 : order.indexOf(after) + 1,
+          body['clipId'] as int);
+      orders[id] = order;
+      return ok({'order': order});
     }
 
     // Clip audio, which is not under /api/v1: what the player loads and
@@ -290,9 +347,9 @@ void main() {
     await tester.tap(find.byIcon(Icons.repeat));
     await tester.pumpAndSettle();
 
-    // Looping is the platform's job, and gapless there.
-    expect(engine.repeat, isTrue);
-    expect(find.byIcon(Icons.repeat_one), findsWidgets);
+    // A queue of one: looping is the platform's job, and gapless there.
+    expect(engine.loop, isTrue);
+    expect(find.byTooltip('Stop repeating'), findsOneWidget);
   });
 
   testWidgets('the player pane opens the clip it is playing', (tester) async {
@@ -387,6 +444,105 @@ void main() {
     expect(find.text('bridge'), findsNothing);
     // And the filter is shown as something you can take off again.
     expect(find.byType(InputChip), findsWidgets);
+  });
+
+  group('a single label', () {
+    FakeServer playlistServer() => FakeServer(clips: [
+          for (final (id, name) in [(1, 'intro'), (2, 'chorus'), (3, 'outro')])
+            clipJson(
+              id: id,
+              name: name,
+              labels: [
+                {'id': 10, 'name': 'set'}
+              ],
+              durationSeconds: 60.0,
+            ),
+          clipJson(id: 4, name: 'jam'),
+        ]);
+
+    Future<void> filterBySet(WidgetTester tester) async {
+      await tester.tap(find.text('set').first);
+      await tester.pumpAndSettle();
+    }
+
+    /// Long-press a row's handle and drag it by [dy].
+    Future<void> dragHandle(WidgetTester tester, int index, double dy) async {
+      final handle = find.byIcon(Icons.drag_handle).at(index);
+      final gesture = await tester.startGesture(tester.getCenter(handle));
+      await tester.pump(kLongPressTimeout + const Duration(milliseconds: 50));
+      for (var i = 0; i < 10; i++) {
+        await gesture.moveBy(Offset(0, dy / 10));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      await gesture.up();
+      await tester.pumpAndSettle();
+    }
+
+    List<String> rowNames(WidgetTester tester) => [
+          for (final name in ['intro', 'chorus', 'outro'])
+            (name, tester.getTopLeft(find.text(name).first).dy),
+        ].sortedByY();
+
+    testWidgets('is its playlist, with a heading and handles', (tester) async {
+      final server = playlistServer();
+      await pumpApp(tester, server);
+      await filterBySet(tester);
+
+      expect(find.text('jam'), findsNothing);
+      expect(find.textContaining('3 clips · 3:00'), findsOneWidget);
+      expect(find.byIcon(Icons.drag_handle), findsNWidgets(3));
+      expect(
+        server.seen.map((r) => r.url.path),
+        contains('/api/v1/labels/10/playlist'),
+      );
+    });
+
+    testWidgets('plays as a queue that says where it is from', (tester) async {
+      final engine = await pumpApp(tester, playlistServer());
+      await filterBySet(tester);
+
+      await tester.tap(find.byIcon(Icons.play_circle).at(1));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('chorus').last);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Playing from set — 2 of 3'), findsOneWidget);
+      expect(find.byTooltip('Next'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('Next'));
+      await tester.pumpAndSettle();
+      expect(engine.loaded.last.path, '/clips/3/audio');
+    });
+
+    testWidgets('a dragged row stays where it lands', (tester) async {
+      final server = playlistServer();
+      await pumpApp(tester, server);
+      await filterBySet(tester);
+
+      final rowHeight = tester.getTopLeft(find.text('chorus')).dy -
+          tester.getTopLeft(find.text('intro')).dy;
+      await dragHandle(tester, 0, rowHeight * 1.6);
+
+      // Where exactly it lands depends on the row heights; what matters
+      // is that it moved, and that the list shows what the server kept.
+      const names = {1: 'intro', 2: 'chorus', 3: 'outro'};
+      expect(server.orders[10], isNot([1, 2, 3]));
+      expect(server.orders[10]!.first, isNot(1));
+      expect(rowNames(tester), [for (final id in server.orders[10]!) names[id]]);
+    });
+
+    testWidgets('a refused drag springs back and says why', (tester) async {
+      final server = playlistServer()..refuseOrder = true;
+      await pumpApp(tester, server);
+      await filterBySet(tester);
+
+      final rowHeight = tester.getTopLeft(find.text('chorus')).dy -
+          tester.getTopLeft(find.text('intro')).dy;
+      await dragHandle(tester, 0, rowHeight * 1.6);
+
+      expect(rowNames(tester), ['intro', 'chorus', 'outro']);
+      expect(find.text('That clip is not in this playlist.'), findsOneWidget);
+    });
   });
 
   testWidgets("a label's notes open from the clip page", (tester) async {
@@ -513,4 +669,9 @@ void main() {
     expect(engine.stopped, isTrue,
         reason: 'audio must not outlive the token that fetched it');
   });
+}
+
+extension on List<(String, double)> {
+  List<String> sortedByY() =>
+      ([...this]..sort((a, b) => a.$2.compareTo(b.$2))).map((e) => e.$1).toList();
 }

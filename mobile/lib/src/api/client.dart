@@ -215,6 +215,29 @@ class IggybillyApi {
       .map((l) => Label.fromJson(l as Map<String, dynamic>))
       .toList(growable: false);
 
+  // -- Playlists ----------------------------------------------------------
+
+  /// A label's clips in the order the band has put them in.
+  Future<Playlist> playlist(int labelId) async => Playlist.fromJson(
+      await _send('GET', '/api/v1/labels/$labelId/playlist')
+          as Map<String, dynamic>);
+
+  /// Move a clip to just after [afterClipId] in a label's playlist, or to
+  /// the front when that is null. Returns the label's clip ids in the
+  /// order they now stand, which the caller applies rather than its own.
+  Future<List<int>> reorderPlaylist(
+    int labelId,
+    int clipId,
+    int? afterClipId,
+  ) async {
+    final json = await _send(
+      'POST',
+      '/api/v1/labels/$labelId/order',
+      body: {'clipId': clipId, 'afterClipId': afterClipId},
+    ) as Map<String, dynamic>;
+    return (json['order'] as List<dynamic>).cast<int>();
+  }
+
   // -- Label wiki ---------------------------------------------------------
 
   Future<WikiPage> wiki(int labelId) async => WikiPage.fromJson(

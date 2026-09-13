@@ -548,3 +548,42 @@ is edited" — gains comments and says the integration is one-way.
   leans on a construct Discord reads differently, such as a fenced block
   inside a `>>>` quote. The alternative is escaping, which is worse for
   every ordinary comment.
+
+## Alternatives considered
+
+- **Comments on the clip as a whole, with no anchor.** Simpler storage
+  and UI. But nearly everything worth saying is about a moment, and
+  losing that is losing the feature.
+- **Anchors in whole seconds.** An integer column and simpler display.
+  Too coarse for clips a bar or two long.
+- **Anchors as ranges, start to end.** Could describe a passage rather
+  than a point. More UI to set and draw, for a precision nobody has asked
+  for.
+- **Clicking the waveform to comment.** No extra strip. But it takes
+  seeking away from the waveform, which is what the waveform is for.
+- **One table, with the anchor on every comment.** One fewer join. But
+  the anchor belongs to the conversation, and replies could disagree
+  with the thread about where it is.
+- **Nested replies.** Lets a reply answer a specific comment. Draws a
+  hierarchy a list of remarks about one moment does not have; a thread
+  that needs a tree belongs in Discord.
+- **Versioned comments, like wiki pages.** Full history of edits. But a
+  comment is one person saying one thing, and an edit is a correction,
+  not a revision worth keeping.
+- **Hard deletes.** No tombstones to render. But replies lose the remark
+  they answered and read as answers to something else.
+- **Separate routes for a new thread and a reply.** Each payload is
+  simpler. But the client then has to know which kind it is sending
+  before it sends it, for no gain.
+- **Escaping comment bodies in Discord.** Nothing in a body can be
+  misread. But every ordinary comment shows its author their own
+  asterisks.
+- **Not posting edits to Discord.** Less noise in the channel. But a
+  quiet edit misleads the people who read the channel rather than the
+  site.
+- **Two-way Discord through a bot.** Replies in Discord would land here.
+  But it needs a gateway connection and a long-running process, which is
+  a different kind of program.
+- **Markdown source as the stored form.** What this draft originally
+  chose, following spec 001. Superseded by
+  [structured-document-storage](structured-document-storage.md).

@@ -58,9 +58,9 @@ representable, which is the point of a closed set.
 
 ## Functionality
 
-Nothing about this is visible on either screen, and that is the
-requirement. Someone writing a page sees exactly what they see today:
-a textarea of Markdown, a Save button, a rendered page, a history.
+Almost nothing about this is visible on either screen. Someone writing
+a page sees what they see today: a textarea of Markdown, a Save button, a
+rendered page, a history.
 
 What changes, from the outside:
 
@@ -69,13 +69,19 @@ What changes, from the outside:
   reading the same text.
 - **An old page stays what it was.** Upgrading the parser changes how new
   text is read and leaves every existing page alone.
+- **What you typed comes back tidied.** The Markdown is not kept; the
+  editor reopens the document written back out as Markdown. A `*` for
+  emphasis may come back as `_`, a list marker as `-`, a run of blank
+  lines as one. The page itself is unchanged by this, since the page is
+  the document, and it happens once, on the save.
 - **Unsupported syntax is refused at save time, not silently dropped.**
   If someone writes something the model cannot hold, the editor says so
   while they are still looking at it, naming the line. Today the same
   text is accepted and quietly rendered as something else, or as nothing.
 
 The editor keeps taking Markdown. It is a good input language and people
-know it. It stops being the thing we keep.
+know it. It stops being the thing we keep: the document is the only
+stored form, and the Markdown in the editor is produced from it.
 
 ### The model
 
@@ -102,9 +108,9 @@ lists, headings deeper than six, autolinked bare text. Tables are out
 because they are hard to render well on a phone and nothing a page about a
 song needs is tabular. Where the model grows, it should grow towards
 nodes that mean something here — lyrics, chords — rather than towards
-more of Markdown; that is a follow-up issue, not this spec. Raw HTML is excluded on
-the same grounds 001 excluded it, and now it is excluded by the shape of
-the storage rather than by a flag on a renderer.
+more of Markdown; that is a follow-up issue, not this spec. Raw HTML is
+excluded on the same grounds 001 excluded it, and now it is excluded by
+the shape of the storage rather than by a flag on a renderer.
 
 ### What this is for, beyond the wiki
 
@@ -115,22 +121,27 @@ the reason to do it now. See "Ordering" at the end.
 
 ### Serialisation
 
-The document is JSON, in a `TEXT` column, alongside the source.
+The document is stored as SQLite JSONB, in a `BLOB` column, and it is
+the only stored form of the page.
 
-The alternatives are worth naming, since the obvious instinct is a blob.
-SQLite has JSONB, a binary encoding it reads faster than text, and a
-`BLOB` of MessagePack or CBOR would be smaller again. Neither earns its
-place here. Pages are a few kilobytes and are read one at a time on a
-request that also touches the network, so the decode cost is not
-measurable. What is measurable is what you can do at three in the
-morning: `sqlite3 iggybilly.db "select document from …"` prints something
-a person can read, `json_extract` works in a query, a backup diff shows
-which page changed, and the format needs no tool to inspect. A blob costs
-all of that to save nothing anyone will notice.
+JSONB is SQLite's own binary encoding of JSON, available since 3.45; the
+SQLite that sqlx bundles here is 3.46. It is not a separate format with
+its own library: it is the parse tree SQLite would otherwise build every
+time it reads JSON text, stored already built. So it is somewhat smaller
+on disk than the text, and any JSON function over it — `json_extract`,
+`->>`, a future index on an expression — skips the parse. Performance
+and storage efficiency are a stated priority for this project, and that
+is the deciding argument.
 
-JSONB stays available if this is ever wrong. `json(document)` and
-`jsonb(document)` convert in place, and nothing above the storage layer
-would change.
+The encoding is SQLite's internal one and is not meant to be read by
+anything else, so it never leaves the database. Writes bind the serde
+JSON text through `jsonb(?)`, and reads select `json(document)` and hand
+the text to serde. Inspection loses nothing: `select json(document) from
+…` in the `sqlite3` shell prints the same readable JSON a `TEXT` column
+would have held, and `json_extract` works on either.
+
+MessagePack or CBOR in a plain `BLOB` would be smaller again, but opaque
+to SQLite itself, and that is a worse trade than the one it saves.
 
 Nodes are tagged by a `type` field, serde-derived with
 `rename_all = "kebab-case"`, with children under `children` and no
@@ -158,56 +169,103 @@ renderer.
 
 ### Database
 
-A new migration adds two columns to `label_wiki_revisions`, and a
-backfill fills them. Revisions are immutable and always have been, so
-the backfill is the only time a stored document is produced from source
-other than at the moment of saving.
+Two migrations, with a Rust backfill between them. The first adds the
+new columns; the backfill converts every existing revision; the second
+drops `content` and makes `document` required. Revisions are immutable,
+so the backfill is the only time a document is produced other than at
+the moment of saving.
+
+The first:
 
 ```sql
 -- The authoritative form of a page is the parsed document, not the
 -- Markdown it was written in. Markdown's reading changes with the
 -- parser and with the decade; a document does not. See
--- specs/drafts/structured-document-storage.md.
+-- specs/implemented/NNN-structured-document-storage.md.
 --
--- `content` stays, and stays exactly what the author typed: it is what
--- the editor reopens and what a history reader wants to see. It is no
--- longer what anything renders from. The invariant is that `document`
--- is `content` parsed by `parser` at the moment the revision was
--- written, and since revisions are never updated, the two cannot drift.
-ALTER TABLE label_wiki_revisions ADD COLUMN document TEXT;
--- The parser and options that produced it, for forensics when a page
--- reads oddly. Not consulted at render time.
+-- Nullable only until the backfill and the next migration: SQLite cannot
+-- add a NOT NULL column without a default, and a default would be a lie.
+ALTER TABLE label_wiki_revisions ADD COLUMN document BLOB;
+-- The parser and options that produced the document, for forensics
+-- when a page reads oddly. Not consulted at render time.
 ALTER TABLE label_wiki_revisions ADD COLUMN parser TEXT;
 ```
 
-Both are nullable because SQLite cannot add a `NOT NULL` column without a
-default, and a default here would be a lie.
+The second rebuilds the table, since SQLite cannot add `NOT NULL` to an
+existing column. The copy is also the guard: a revision the backfill
+missed fails the `NOT NULL`, the migration's transaction rolls back, and
+the server does not start with `content` gone and a page lost.
+
+```sql
+-- The Markdown is gone: the editor is given the document written back
+-- out as Markdown. document is JSONB; read it with json(document).
+CREATE TABLE label_wiki_revisions_new (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    label_id  INTEGER NOT NULL REFERENCES labels(id) ON DELETE CASCADE,
+    document  BLOB    NOT NULL,
+    parser    TEXT    NOT NULL,
+    edited_by INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    edited_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+INSERT INTO label_wiki_revisions_new (id, label_id, document, parser, edited_by, edited_at)
+    SELECT id, label_id, document, parser, edited_by, edited_at FROM label_wiki_revisions;
+DROP TABLE label_wiki_revisions;
+ALTER TABLE label_wiki_revisions_new RENAME TO label_wiki_revisions;
+CREATE INDEX idx_label_wiki_label ON label_wiki_revisions(label_id, id DESC);
+```
+
+Nothing references `label_wiki_revisions`, so dropping and renaming it
+inside the migration's transaction needs no change to `foreign_keys`.
 
 The backfill runs in Rust, not in SQL: it is a parse per revision, and a
 migration that needs the application's own parser is not something SQL
-can express. `sqlx::migrate!` has no hook for running code alongside a
-migration — its migrations are SQL files and nothing else — but it does
-not need one. `db::connect` already runs the migrations on every start,
-so the backfill goes directly after that call:
+can express. `sqlx::migrate!` has no hook for running code between
+migrations, but it does not need one: `db::connect` can run the embedded
+migrations in two passes with the backfill between.
 
 ```rust
-sqlx::migrate!("./migrations").run(&pool).await?;
-document::backfill(&pool).await?;
+static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
+
+let first = Migrator {
+    migrations: MIGRATOR.iter().filter(|m| m.version <= ADD_DOCUMENT).cloned().collect(),
+    ignore_missing: true,
+    ..Migrator::DEFAULT
+};
+first.run(&pool).await?;
+if !applied(&pool, DROP_CONTENT).await? {
+    document::backfill(&pool).await?;
+}
+MIGRATOR.run(&pool).await?;
 ```
 
-`backfill` selects the revisions whose `document` is null, parses each
-and writes the result. It is idempotent by construction: once every row
-is filled, the select returns nothing and the call costs one query. There
-is no manual step after merging, and no deploy that can forget one; a
-database restored from an old backup is filled the first time the server
-opens it.
+`ADD_DOCUMENT` and `DROP_CONTENT` are the two migrations' versions, and
+`applied` looks the second up in `_sqlx_migrations`. `ignore_missing`
+lets the first pass run against a database that has already applied
+later migrations, and the check on `DROP_CONTENT` skips the backfill once
+`content` no longer exists. On every start after the first, both passes
+are no-ops.
 
-A revision whose source does not fit the model — a table, an image, raw
-HTML written before this change — cannot be parsed, and the backfill must
-not refuse to start the server over it. It leaves that row's `document`
-null and logs the revision at WARN. The loader, finding a null, serves the
-source as a single `code-block`, so the page is readable and visibly
-unconverted, and the next save of that page, which must parse, fixes it.
+`Migrator`'s fields are public so that `migrate!` can build one in a
+constant, and sqlx marks them hidden and exempt from semver. Building a
+`Migrator` by hand therefore leans on sqlx 0.8's internals. The lock file
+pins that, and a test in `tests/` that migrates a database holding a
+pre-change revision to the end is what notices when an upgrade breaks it.
+Once no database older than the change exists — every deploy has run it
+and backups before it have aged out — the two passes and the backfill can
+be deleted, and `connect` goes back to one `run`.
+
+This is one deploy with no manual step, and it is also right for a
+database restored from a backup taken before the change: it is brought
+to the first migration, converted, and taken the rest of the way, in
+order, the first time the server opens it.
+
+`backfill` selects the revisions whose `document` is null and writes a
+document for each. A revision whose source does not fit the model — a
+table, an image, raw HTML written before this change — cannot be parsed,
+and dropping its text would lose it. It becomes a document holding the
+source verbatim as a single `code-block`, with `parser` recording that
+it was a fallback, and is logged at WARN. The page is readable, visibly
+unconverted, and the text is all there to be fixed by the next edit.
 
 ### Rust
 
@@ -215,6 +273,7 @@ unconverted, and the next save of that page, which must parse, fixes it.
 
 ```rust
 pub fn parse(source: &str) -> Result<Document, ParseError>;
+pub fn to_markdown(doc: &Document) -> String;
 pub fn to_html(doc: &Document) -> String;
 ```
 
@@ -228,6 +287,12 @@ hold any string. comrak's table extension stays on even though the model
 has no table: with it off, a table would parse as a paragraph of pipes
 and slip through, rather than being recognised and refused.
 
+`to_markdown` writes a document back out as Markdown, in one fixed
+style, for the editor and for restore. Its contract is that it loses
+nothing the model holds: `parse(to_markdown(d)) == d` for every
+document, which is what makes dropping the source safe. The text is
+normalised; the document is not changed by the trip.
+
 `to_html` replaces `markdown::render` for pages. `src/markdown.rs` is
 reduced to the comrak call and the AST walk, or absorbed into
 `document.rs` entirely, which is probably cleaner — the module's whole
@@ -236,18 +301,23 @@ purpose was rendering, and rendering moves.
 Its existing tests move with it, rewritten against the new path: raw
 HTML, `javascript:` links, wiki links, and wiki links inside code. Those
 four are the spec of the safety properties and must not be lost in the
-move. New tests: every node type round-trips through serde, an
-unsupported construct is an error and not a silent drop, and a document
-stored by an older model version still loads.
+move. New tests: every node type round-trips through serde and through
+JSONB, `parse(to_markdown(d)) == d` over a set of documents exercising
+every node type and every escape `to_markdown` needs (a `*` in text, a
+line starting with `#` or `1.`), an unsupported construct is an error
+and not a silent drop, the backfill's fallback keeps the source whole,
+and a document stored by an older model version still loads.
 
-`src/queries/wiki.rs` gains `document` on `Page` and `Revision`, and
-`save` takes both the source and the parsed document, which the handler
+`src/queries/wiki.rs` replaces `content` with `document` on `Page` and
+`Revision`, and `save` takes the parsed document, which the handler
 produces so that a parse failure is a 400 before anything is written.
+`revision_content` becomes `revision_document`, and restore saves that
+document as the new revision without a trip through Markdown.
 
 ### The clients
 
 Web: `WikiPage.content_html` keeps its name and meaning and is now
-produced by `document::to_html`. `WikiPanel.tsx` and `wiki-history.tsx`
+produced by `document::to_html`; `content` is `document::to_markdown`. `WikiPanel.tsx` and `wiki-history.tsx`
 do not change at all, including their scoped lint disables, whose comment
 should now point at `document.rs`.
 
@@ -261,11 +331,14 @@ lines and no dependency. `flutter_markdown_plus` comes out of
 That is a larger change on the phone than on the web, and it is also the
 point: it is what makes the two agree. The editor still posts Markdown,
 so `saveWiki` is unchanged and a device with an old build keeps working,
-since the server is what parses.
+since the server is what parses. After a save, both editors take the
+page from the save's answer rather than keeping what was typed, so the
+normalised text is what the author sees next.
 
 ### API shape
 
-`/api/v1` sends both: `content` for the editor, `document` for rendering.
+`/api/v1` sends both: `content`, produced by `to_markdown`, for the
+editor, and `document` for rendering.
 The web's `/api` sends `content` and `content_html` as it does now, and
 does not need the document yet, since it cannot render one any better
 than the server can. That changes with
@@ -299,15 +372,16 @@ this document and needs rewriting when it is picked up.
 
 ## Open questions
 
-- **JSON text over JSONB or a binary encoding.** Argued above, and the
-  argument is about inspectability rather than correctness. If the
-  database ever gets big enough that this matters, the conversion is a
-  migration and nothing above it changes.
-- **The source column stays.** It is what the editor reopens, and the
-  alternative is serialising the document back to Markdown, which would
-  normalise everyone's typing on every edit. Keeping it means one row
-  holds the same content twice, in two forms, which is a duplication with
-  a reason but still a duplication.
+- **`to_markdown`'s style.** Which emphasis marker, which list marker,
+  how code blocks are fenced. Any fixed choice satisfies the round-trip;
+  the one to pick is whatever most of the existing pages already use,
+  so that the first save of each changes as little as possible. Worth
+  looking at the backfilled pages' `to_markdown` against their old
+  source before fixing it.
+- **History shows normalised text.** An old revision's source is gone
+  after the second migration, so history shows each revision as
+  `to_markdown` writes it, not as it was typed. Nothing a reader of
+  history wants is in the difference.
 - **Whether the phone renderer is worth its size.** A few hundred lines
   of widget-building replaces a package. It is the only way to make the
   two clients agree, but it is also the kind of code that grows a long
@@ -317,3 +391,39 @@ this document and needs rewriting when it is picked up.
   strategy. A real answer is a model migration that rewrites stored
   documents, and the first time the model version moves is when that gets
   designed.
+
+## Alternatives considered
+
+- **Keep Markdown source as the stored form**, as spec 001 does. Simple,
+  and the editor gets back exactly what was typed. But what a page looks
+  like depends on which parser reads it and when, so the two clients
+  disagree and a parser upgrade silently changes old pages.
+- **Store comrak's AST.** No model of our own to design, and nothing
+  comrak parses is lost. But it writes a library's internal types into
+  the schema, and every comrak upgrade becomes a data migration.
+- **Store rendered HTML.** The web would need no rendering at all. But
+  HTML is one rendering of a page, not the page: the phone would have to
+  parse HTML to draw widgets, and markup safety would become a property
+  of stored data rather than of the model.
+- **JSON text in a `TEXT` column.** Readable with a plain `select` and
+  diffable in a backup. But it is larger, and re-parsed by every JSON
+  function; `json(document)` gives the same readability over JSONB.
+- **MessagePack or CBOR in a `BLOB`.** The smallest encoding. But opaque
+  to SQLite, so no `json_extract` or expression indexes, and one more
+  crate.
+- **Keep the source alongside the document.** The editor and history
+  show what was typed, with no normalisation. But the same content is
+  stored twice in two forms, and nothing reads the source that the
+  document cannot provide.
+- **Backfill as a CLI subcommand run by the deploy.** Plain, and no
+  reliance on sqlx internals. But it is a manual step that can be
+  forgotten, and `content` could not be dropped in the same release.
+- **Two deploys: add and backfill, then drop `content` later.** Avoids
+  building a `Migrator` by hand. But a database restored from a backup
+  older than both would reach the drop with nothing backfilled, and fail.
+- **Keep tables in the model.** Existing pages with tables would convert
+  cleanly. But tables render badly on a phone and a page about a song
+  does not need them.
+- **Keep `flutter_markdown_plus` on the phone, fed by `to_markdown`.** No
+  renderer to write. But it brings back the second Markdown parser that
+  this spec exists to remove.

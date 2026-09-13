@@ -259,29 +259,6 @@ turns it off.
 And it is one more thing to understand when the release breaks in two
 years. That is real, and it is the price of the feature.
 
-### The alternatives, and why not
-
-**Keep altool and add a second call.** The second call is the App Store
-Connect REST API by hand: mint an ES256 JWT, poll `/v1/builds` filtered
-by version and build number until the record appears and processing
-finishes, `POST`/`PATCH` `/v1/betaBuildLocalizations`, then `POST` the
-`betaGroups` relationship, then create a beta review submission when the
-version is new. `local/make-ios-signing` already contains a working JWT
-minter and a decent error-reporting `api` helper, so this is not
-hypothetical — it is roughly a hundred and twenty lines of bash moved and
-extended, including a polling loop. It would be the right answer if the
-gap were one field. It is four API resources and a wait, and hand-rolling
-that to avoid a dependency is the more expensive kind of frugality.
-
-**Upload with altool, then use `asc` only for the notes and the group.**
-Keeps the binary on Apple's own path and uses `asc` for the metadata.
-Tempting, and it stays available as a fallback if uploads turn out
-flaky — it is `asc builds wait --app … --latest` followed by
-`asc publish testflight --build-id …`, which is one line's difference in
-the script. But it installs `asc` anyway, waits for processing anyway,
-and adds a build lookup that the single command does for free. If the
-tool is on the runner there is no reason to keep two uploaders.
-
 ## Implementation
 
 One script and one workflow step, as the issue says, and a second script
@@ -443,7 +420,7 @@ issue; not worth smuggling into this one.
   often. The mitigation is that failure is cheap: the build number folds
   in the run attempt, so a re-run is clean, and a build that uploaded but
   failed later is recoverable with `--build-id`. If uploads do prove
-  flaky, the hybrid described above is one line.
+  flaky, the hybrid under "Alternatives considered" is one line.
 - **Whether a build must be fully processed before notes can be
   attached.** `asc` waits, so this spec waits. Apple may well accept a
   beta build localization against a build still in `PROCESSING`, which
@@ -477,3 +454,46 @@ issue; not worth smuggling into this one.
   noticing. Nobody is watching a release workflow between releases. The likely outcome is that it stays on 5.2.1 until something
   breaks, which is acceptable and should be admitted rather than
   designed around.
+
+## Alternatives considered
+
+- **Keep altool and call the App Store Connect API by hand.** No
+  third-party binary in the release path, and `local/make-ios-signing`
+  already has a JWT minter and an API helper. But it means about a hundred
+  and twenty lines of bash: a polling loop, four API resources, and beta
+  review submission.
+- **Upload with altool, then use `asc` for the notes and the group**
+  (`asc builds wait --latest`, then `asc publish testflight --build-id`).
+  The binary still goes through Apple's long-standing path. But it
+  installs `asc` anyway, waits anyway, and adds a build lookup. It is the
+  fallback if uploads prove flaky, and a one-line change.
+- **`asc builds upload`**, as the issue proposes. A drop-in for altool.
+  But it sets neither notes nor a group, so it does not close the gap.
+- **Installing `asc` with `curl` and `shasum` in the script.** No action
+  dependency. But it is the same download and check `setup-asc` already
+  does, carried in our own script.
+- **`brew install asc`.** One line. But Homebrew updates itself first,
+  which takes minutes, and the version is not pinned.
+- **`setup-asc` with `version: latest`.** Never out of date. But the
+  release path would change between tags, with releases arriving several
+  a week.
+- **Authenticating through a config file with `ASC_BYPASS_KEYCHAIN`.**
+  The issue's expectation. That is for credentials that arrive as a
+  file; here it would demote the environment to a fallback.
+- **Notes from a `CHANGELOG.md`.** Reviewed in a PR, and kept in history.
+  But it must be committed before the tag, which makes a release two
+  steps and is easy to forget.
+- **Notes from commit subjects alone.** Needs no discipline. But
+  subjects are written for `git log`, not for testers. Kept only as the
+  fallback when the tag message is empty.
+- **An internal tester group.** No beta review. But internal testers
+  must be users on the App Store Connect team, which bandmates are not.
+- **Not waiting for processing.** A faster, cheaper job. But notes cannot
+  be attached before the build exists, and a green job would only mean
+  the upload worked.
+- **Tagging releases by hand instead of `local/release`.** Nothing to
+  write. But the version arithmetic and the annotated tag's message are
+  then easy to get wrong.
+- **Replacing `local/make-ios-signing` with `asc` too.** As of 5.2.1 it
+  can do nearly all of it. But the script works and runs once a year;
+  worth its own issue.

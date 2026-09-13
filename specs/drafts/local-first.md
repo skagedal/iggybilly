@@ -1056,3 +1056,55 @@ Five slices, each shippable, in this order.
   and the router. If a page is added that reads the replica, it is a line
   in each, and forgetting the client's line only costs that page its
   offline mode.
+
+## Alternatives considered
+
+- **Stay thin clients and cache responses.** Little code, and reading
+  offline mostly works. But there is no way to write offline, screens
+  show whatever was cached last, and there is no coherent conflict story.
+- **A sync framework** such as Jazz, Replicache/Zero, ElectricSQL or
+  PowerSync. Partial sync, conflicts and reconnection come solved. But
+  each wants to own the data model, several assume Postgres on the
+  server, and none fits a Rust server with SQLite and clients in both
+  Dart and TypeScript.
+- **CRDTs for all data**, with Automerge or Yjs. Concurrent edits merge
+  automatically, including text. But it needs a library in three
+  languages, document metadata grows, and the conflicts this app actually
+  has are rare and simple.
+- **`updated_at` columns instead of a change log.** No triggers. But
+  timestamps are not in commit order, so a cursor can skip a change, and
+  deletes would need soft-delete on every table.
+- **An append-only log, one row per change.** Keeps the full history of
+  changes. But it grows without bound, and a client sees an entity once
+  per change instead of once per sync.
+- **Server push over SSE or WebSocket.** Changes arrive at once. Costs a
+  long-lived connection per client, for five people who would not notice
+  a minute's delay.
+- **Partial sync.** Smaller replicas. But the whole dataset is a few
+  megabytes, and choosing a slice costs more than syncing all of it.
+- **Last save wins for wiki pages**, as the web does today. Simpler, and
+  no conflict screen. But a queued edit hours old would silently
+  overwrite a fresh one.
+- **Automatic merging of wiki text.** No manual merge. But merged prose
+  from two authors is often wrong in ways nobody notices.
+- **Client-issued ids for new labels.** Labels created offline would be
+  first-class at once. But it is a bigger contract with the server, for a
+  state that lasts until the next signal.
+- **On the phone, `drift` or `sqflite`.** Drift gives typed queries and
+  migrations, but it is a code generator and an ORM for five tables.
+  sqflite is a platform channel and cannot run under `flutter test`.
+- **In the browser, SQLite compiled to WebAssembly.** The phone's schema
+  and statements would carry over as they are. But it is a megabyte on
+  first load and needs OPFS in a worker, for queries the in-memory store
+  never makes.
+- **In the browser, an IndexedDB wrapper** such as `idb` or Dexie. A nicer
+  API. A dependency for a handful of calls.
+- **No service worker.** Simpler, and nothing stale to worry about. But
+  the site would not open without a network, so "open the app" would mean
+  something different on the web.
+- **One shared client core**, in Rust compiled to WebAssembly and FFI, or
+  in Dart compiled to JavaScript. One implementation of the rules. But
+  the build system would be larger than the code it shares.
+- **A separate spec for the web.** Each client designed on its own
+  schedule. But the protocol and the rules could diverge before the
+  second one is written.

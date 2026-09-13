@@ -391,3 +391,39 @@ this document and needs rewriting when it is picked up.
   strategy. A real answer is a model migration that rewrites stored
   documents, and the first time the model version moves is when that gets
   designed.
+
+## Alternatives considered
+
+- **Keep Markdown source as the stored form**, as spec 001 does. Simple,
+  and the editor gets back exactly what was typed. But what a page looks
+  like depends on which parser reads it and when, so the two clients
+  disagree and a parser upgrade silently changes old pages.
+- **Store comrak's AST.** No model of our own to design, and nothing
+  comrak parses is lost. But it writes a library's internal types into
+  the schema, and every comrak upgrade becomes a data migration.
+- **Store rendered HTML.** The web would need no rendering at all. But
+  HTML is one rendering of a page, not the page: the phone would have to
+  parse HTML to draw widgets, and markup safety would become a property
+  of stored data rather than of the model.
+- **JSON text in a `TEXT` column.** Readable with a plain `select` and
+  diffable in a backup. But it is larger, and re-parsed by every JSON
+  function; `json(document)` gives the same readability over JSONB.
+- **MessagePack or CBOR in a `BLOB`.** The smallest encoding. But opaque
+  to SQLite, so no `json_extract` or expression indexes, and one more
+  crate.
+- **Keep the source alongside the document.** The editor and history
+  show what was typed, with no normalisation. But the same content is
+  stored twice in two forms, and nothing reads the source that the
+  document cannot provide.
+- **Backfill as a CLI subcommand run by the deploy.** Plain, and no
+  reliance on sqlx internals. But it is a manual step that can be
+  forgotten, and `content` could not be dropped in the same release.
+- **Two deploys: add and backfill, then drop `content` later.** Avoids
+  building a `Migrator` by hand. But a database restored from a backup
+  older than both would reach the drop with nothing backfilled, and fail.
+- **Keep tables in the model.** Existing pages with tables would convert
+  cleanly. But tables render badly on a phone and a page about a song
+  does not need them.
+- **Keep `flutter_markdown_plus` on the phone, fed by `to_markdown`.** No
+  renderer to write. But it brings back the second Markdown parser that
+  this spec exists to remove.

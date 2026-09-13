@@ -337,3 +337,36 @@ interruption rule.
   microphone is used. A band with an interface plugged in may want to
   choose; `enumerateDevices` makes it easy, but it is a control nobody
   has asked for yet.
+
+## Alternatives considered
+
+- **A dedicated recording endpoint.** A clean, single-file contract. But
+  it would duplicate `ingest`, and a recording is supposed to be
+  indistinguishable from an upload.
+- **Decoding Opus on the server.** One source of peaks for every clip.
+  But symphonia has no Opus decoder, so it means libopus or ffmpeg as a
+  native dependency of the server.
+- **Transcoding recordings on the server.** Every clip would be in a
+  format symphonia reads. But it needs ffmpeg in the image, and changes
+  the bytes the band recorded.
+- **Recording MP4/AAC in every browser.** The server could decode every
+  recording. But not every browser's `MediaRecorder` produces it, so the
+  web would still need a fallback.
+- **Always using the client's peaks.** No decoding on the server for
+  recordings. But the server's peaks are the source of truth wherever it
+  can compute them, and a client bug would then reach every viewer.
+- **Metadata as one JSON part or query parameters.** Simpler to parse.
+  But mapping it to files by index is more fragile than "applies to the
+  next file", and ordered parts keep `ingest` a single streaming pass.
+- **A second WaveSurfer instance for review playback.** Consistent with
+  the recording view. Heavier than an `<audio>` element and the existing
+  canvas, as with clip rows.
+- **Keeping unsaved recordings across restarts.** No take is ever lost.
+  But it needs an inbox of orphaned files with its own screen and
+  eviction, which is a feature of its own.
+- **An offline save queue.** Record in the basement, upload later. Its
+  place is [local-first](local-first.md), and it changes what an unsaved
+  recording means.
+- **Writing the phone recorder against platform APIs directly.** No
+  plugin dependency. Two native implementations to maintain, where the
+  `record` package already covers both.

@@ -10,8 +10,19 @@ import { useRouter } from "../router";
 import type { ClipDetail, ClipLabel, ClipProps } from "../types";
 
 export default function ClipPage({ username, clip }: ClipProps) {
+  const player = usePlayer();
   const [name, setName] = useState(clip.name);
   const [labels, setLabels] = useState(clip.labels);
+
+  // A playlist playing from a label this clip just gained or lost grows
+  // or shrinks to match.
+  const labelsChanged = (next: ClipLabel[]) => {
+    setLabels(next);
+    player.syncLabels(
+      trackFor({ ...clip, name }),
+      next.map((label) => label.name),
+    );
+  };
 
   const nav = (
     <>
@@ -41,8 +52,8 @@ export default function ClipPage({ username, clip }: ClipProps) {
         <Player clip={{ ...clip, name }} />
 
         <h2>Labels</h2>
-        <LabelList clipId={clip.id} labels={labels} onChanged={setLabels} />
-        <LabelInput clipId={clip.id} onAdded={setLabels} />
+        <LabelList clipId={clip.id} labels={labels} onChanged={labelsChanged} />
+        <LabelInput clipId={clip.id} onAdded={labelsChanged} />
 
         {clip.canDelete && <DeleteClip clipId={clip.id} name={name} />}
       </section>
@@ -242,8 +253,9 @@ function DeleteClip({ clipId, name }: { clipId: number; name: string }) {
     try {
       await api.deleteClip(clipId);
       // Its audio is gone from disk, so stop it before leaving —
-      // otherwise the bar would keep a dead URL loaded.
-      if (player.track?.clipId === clipId) player.stop();
+      // otherwise the bar would keep a dead URL loaded — or take it out of
+      // the queue if it was only waiting its turn.
+      player.forget(clipId);
       navigate("/");
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Could not delete the clip.");

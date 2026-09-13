@@ -97,6 +97,17 @@ export const api = {
     return get<LabelSearchResult>(`/api/labels/search?${params}`);
   },
 
+  /**
+   * Move a clip to just after `afterClipId` in a label's playlist, or to
+   * the front when that is null. Answers the label's whole order as it
+   * now stands.
+   */
+  reorderPlaylist: (labelId: number, clipId: number, afterClipId: number | null) =>
+    post<{ order: number[] }>(`/api/labels/${labelId}/order`, {
+      clipId,
+      afterClipId,
+    }),
+
   getWiki: (labelId: number) => get<WikiPage>(`/api/labels/${labelId}/wiki`),
 
   saveWiki: (labelId: number, content: string) =>

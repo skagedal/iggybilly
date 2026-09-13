@@ -15,9 +15,19 @@ Tapping the bar raises the whole player: the full waveform, both times,
 ten-second skips, a repeat toggle, and the switch that keeps the clip on
 the phone.
 
-Repeat is `LoopMode.one` on the platform player rather than a seek when
-the clip ends. That makes it gapless on both platforms, which is the
-whole point when the clip is a two-bar riff.
+Every playback is a queue. Playing a clip anywhere makes a queue of one;
+playing from a list filtered by exactly one label queues that label's
+playlist, which adds previous, next and a "Playing from …" list to the
+player. The queue follows the playlist: a reorder or a relabel that
+reaches the list changes what comes next, and never the clip that is
+playing.
+
+Repeat repeats the queue. For a queue of one it is `LoopMode.one` on the
+platform player rather than a seek when the clip ends, which makes it
+gapless on both platforms — the whole point when the clip is a two-bar
+riff. For a longer queue the platform does not loop, and the controller
+wraps from the last clip to the first on completion. `just_audio`'s own
+playlist support is not used; the queue is the controller's.
 
 Two things in here exist because of specific bugs, and are worth knowing
 about before either is "simplified":

@@ -21,11 +21,16 @@ import { formatTime } from "./format";
  * anywhere hands it to this bar; playing another takes the bar over.
  * Because client-side navigation keeps the document alive, the audio
  * keeps going as you move between pages.
+ *
+ * Every playback is a queue. Most queues hold one track; pressing play
+ * in a playlist view queues the whole label.
  */
 
 export interface Track {
   clipId: number;
   name: string;
+  uploader: string;
+  recordingDate: string | null;
   audioUrl: string;
   clipHref: string;
   downloadUrl: string;
@@ -35,8 +40,28 @@ export interface Track {
   durationSeconds: number | null;
 }
 
+/**
+ * What plays next. The current track is the player's `track`, found in
+ * `tracks` by id rather than held as an index, so a reorder arriving
+ * under a playing queue needs no repair.
+ */
+export interface Queue {
+  /** The label this queue is the playlist of, or null for a lone clip. */
+  source: string | null;
+  tracks: Track[];
+  /**
+   * Where to carry on once the playing clip has left `tracks` — its
+   * label removed while it played: the first of its old successors
+   * still in the list.
+   */
+  resumeAt: number | null;
+}
+
 /** How far the pane's skip buttons jump. */
 const SKIP_SECONDS = 10;
+
+/** Past this far into a track, previous restarts it instead of going back. */
+const RESTART_SECONDS = 3;
 
 /** Where the repeat setting lives between visits. */
 const REPEAT_KEY = "iggybilly.repeat";
@@ -49,6 +74,8 @@ const REPEAT_KEY = "iggybilly.repeat";
 export function trackFor(clip: {
   id: number;
   name: string;
+  uploader: string;
+  recordingDate: string | null;
   originalFilename: string;
   peaks: number[] | null;
   durationSeconds: number | null;
@@ -56,6 +83,8 @@ export function trackFor(clip: {
   return {
     clipId: clip.id,
     name: clip.name,
+    uploader: clip.uploader,
+    recordingDate: clip.recordingDate,
     audioUrl: `/clips/${clip.id}/audio`,
     clipHref: `/clips/${clip.id}`,
     downloadUrl: `/clips/${clip.id}/audio?download=1`,
@@ -67,26 +96,47 @@ export function trackFor(clip: {
 
 interface PlayerContextValue {
   track: Track | null;
+  queue: Queue;
   isPlaying: boolean;
   currentTime: number;
   /** The clip's length in seconds, or 0 while it isn't known. */
   duration: number;
   /** Progress through the current track, 0–1, for waveform previews. */
   progress: number;
-  /** Whether the clip starts again instead of ending. */
+  /** Whether the queue starts again instead of ending. */
   repeat: boolean;
-  /** Load a clip into the bar and start it. Re-playing toggles instead. */
+  /** Why playback stopped, when it stopped on its own. */
+  error: string | null;
+  /** Load a clip as a queue of one and start it. Re-playing toggles instead. */
   play: (track: Track) => void;
+  /** Queue a label's tracks and start at `clipId`. Re-playing toggles. */
+  playQueue: (tracks: Track[], clipId: number, source: string) => void;
+  /** Play the track after this one; wraps when repeat is on. */
+  next: () => void;
+  /** Go back a track, or restart this one if it is past its opening. */
+  previous: () => void;
+  /** Play a track already in the queue. */
+  jumpTo: (clipId: number) => void;
+  /**
+   * Replace what is queued without touching what is playing — if the
+   * queue is the playlist of `source`, and otherwise nothing.
+   */
+  setQueueTracks: (source: string, tracks: Track[]) => void;
+  /**
+   * Keep a playing label queue in step with a clip's labels: the clip
+   * joins the end when it gains the label, and leaves when it loses it.
+   */
+  syncLabels: (track: Track, labelNames: string[]) => void;
   /** Play/pause whatever is loaded. */
   toggle: () => void;
   /** Seek the current track, as a 0–1 fraction. Ignored if not loaded. */
   seek: (fraction: number) => void;
   /** Jump by a number of seconds, clamped to the clip. Negative goes back. */
   skip: (seconds: number) => void;
-  /** Turn looping on or off. Remembered for next time. */
+  /** Turn repeat on or off. Remembered for next time. */
   setRepeat: (repeat: boolean) => void;
-  /** Drop the current track — used when its clip is deleted. */
-  stop: () => void;
+  /** A clip was deleted: stop if it is playing, else drop it from the queue. */
+  forget: (clipId: number) => void;
   /** Keep the bar's caption honest when a playing clip is renamed. */
   rename: (clipId: number, name: string) => void;
 }
@@ -110,9 +160,43 @@ function storedRepeat(): boolean {
   }
 }
 
+const EMPTY_QUEUE: Queue = { source: null, tracks: [], resumeAt: null };
+
+/** `queue` with `tracks` swapped in, keeping track of where `current` was. */
+function withTracks(queue: Queue, tracks: Track[], current: number | null): Queue {
+  const kept = new Set(tracks.map((t) => t.clipId));
+  let { resumeAt } = queue;
+  const index = queue.tracks.findIndex((t) => t.clipId === current);
+  if (current !== null && index !== -1 && !kept.has(current)) {
+    resumeAt =
+      queue.tracks.slice(index + 1).find((t) => kept.has(t.clipId))?.clipId ??
+      null;
+  }
+  return { ...queue, tracks, resumeAt };
+}
+
+/** The track to play after `current`, or null when the queue has run out. */
+function following(
+  queue: Queue,
+  current: number | null,
+  repeat: boolean,
+): Track | null {
+  const { tracks, resumeAt } = queue;
+  if (tracks.length === 0) return null;
+  const index = tracks.findIndex((t) => t.clipId === current);
+  if (index === -1) {
+    const resume = tracks.find((t) => t.clipId === resumeAt);
+    if (resume) return resume;
+    return repeat ? (tracks[0] ?? null) : null;
+  }
+  return tracks[index + 1] ?? (repeat ? (tracks[0] ?? null) : null);
+}
+
 export function PlayerProvider({ children }: { children: ReactNode }) {
   const [track, setTrack] = useState<Track | null>(null);
+  const [queue, setQueue] = useState<Queue>(EMPTY_QUEUE);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   // The position is stored together with the clip it was measured in, so
   // loading another clip reads as 0 without an effect having to reset it.
   const [played, setPlayed] = useState<{
@@ -132,10 +216,25 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const waveSurferRef = useRef<WaveSurfer | null>(null);
+  // Tracks that failed to load in a row. A whole pass of them stops
+  // playback rather than spinning through a dead list.
+  const failuresRef = useRef(0);
+  // For the queue edits, which arrive from pages and must not change
+  // identity every time the track does.
+  const trackRef = useRef<Track | null>(null);
+  useEffect(() => {
+    trackRef.current = track;
+  }, [track]);
+
+  // The instance's event handlers outlive renders, so they reach the
+  // queue through these rather than through a stale closure.
+  const onFinishRef = useRef<() => void>(() => {});
+  const onErrorRef = useRef<() => void>(() => {});
 
   // Build (and rebuild) the instance whenever the loaded track changes.
   // The container belongs to the bar, which never unmounts, so this is
-  // the only thing that ever tears the player down.
+  // the only thing that ever tears the player down — and advancing the
+  // queue is a change of track, so it goes through here too.
   useEffect(() => {
     const container = containerRef.current;
     if (!container || !track) return;
@@ -178,12 +277,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       });
     }
 
-    ws.on("timeupdate", (seconds) =>
-      setPlayed({ clipId: track.clipId, seconds }),
-    );
+    ws.on("timeupdate", (seconds) => {
+      // Audio actually moving, not just `play` — which fires before a
+      // missing file has had the chance to fail.
+      if (seconds > 0) failuresRef.current = 0;
+      setPlayed({ clipId: track.clipId, seconds });
+    });
     ws.on("play", () => setIsPlaying(true));
     ws.on("pause", () => setIsPlaying(false));
-    ws.on("finish", () => setIsPlaying(false));
+    ws.on("finish", () => onFinishRef.current());
+    // A failed fetch or decode, or the media element refusing the file.
+    ws.on("error", () => onErrorRef.current());
 
     waveSurferRef.current = ws;
 
@@ -202,16 +306,84 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   // Looping is the media element's own, which makes it gapless — a
   // bar-length riff played twice with a hole in the middle is not the
-  // same thing as a bar-length riff played twice. It also means `finish`
-  // never fires while repeat is on, so nothing has to undo the pause.
+  // same thing as a bar-length riff played twice. So the element loops
+  // itself whenever repeat is on and the queue is this one track; only a
+  // real playlist wraps by advancing, and there the seam is a track
+  // change anyway. With the element looping, `finish` never fires.
   //
   // Separate from the effect above so that turning repeat on does not
   // rebuild the player and lose your place. `track` is a dependency
-  // because a rebuilt player has its own element, which starts unlooped.
+  // because a rebuilt player has its own element, which starts unlooped;
+  // the queue is one because the rule depends on its length.
+  const loopsItself =
+    repeat &&
+    queue.tracks.length === 1 &&
+    queue.tracks[0]?.clipId === track?.clipId;
   useEffect(() => {
     const media = waveSurferRef.current?.getMediaElement();
-    if (media) media.loop = repeat;
-  }, [repeat, track]);
+    if (media) media.loop = loopsItself;
+  }, [loopsItself, track]);
+
+  /** Start `next`, or wind the current one back if it is the same clip. */
+  const start = useCallback(
+    (next: Track) => {
+      setError(null);
+      setQueue((q) => (q.resumeAt === null ? q : { ...q, resumeAt: null }));
+      if (next.clipId === track?.clipId) {
+        const ws = waveSurferRef.current;
+        ws?.setTime(0);
+        void ws?.play();
+        return;
+      }
+      setTrack(next);
+    },
+    [track],
+  );
+
+  const advance = useCallback(() => {
+    const next = following(queue, track?.clipId ?? null, repeat);
+    if (next) {
+      start(next);
+      return;
+    }
+    // Leave the last track loaded and wound back, so the obvious next
+    // gesture — press play again — works.
+    const ws = waveSurferRef.current;
+    ws?.pause();
+    ws?.setTime(0);
+  }, [queue, track, repeat, start]);
+
+  const stop = useCallback(() => {
+    setTrack(null);
+    setQueue(EMPTY_QUEUE);
+    // Dropping the position too: stopping and then playing the same clip
+    // rebuilds the instance at zero, and a kept position would be read as
+    // still belonging to it until the first timeupdate.
+    setPlayed({ clipId: null, seconds: 0 });
+    // A pane for a clip that is gone has nothing to show.
+    setExpanded(false);
+  }, []);
+
+  useEffect(() => {
+    onFinishRef.current = advance;
+    onErrorRef.current = () => {
+      // A clip deleted after it was queued, or a file the browser will
+      // not decode. Skip it, unless every track has now failed in turn.
+      failuresRef.current += 1;
+      const next = following(queue, track?.clipId ?? null, true);
+      if (
+        !next ||
+        next.clipId === track?.clipId ||
+        failuresRef.current >= queue.tracks.length
+      ) {
+        failuresRef.current = 0;
+        stop();
+        setError("That clip could not be played.");
+        return;
+      }
+      start(next);
+    };
+  }, [advance, queue, track, start, stop]);
 
   const play = useCallback(
     (next: Track) => {
@@ -223,10 +395,71 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         void waveSurferRef.current?.playPause();
         return;
       }
-      setTrack(next);
+      setQueue({ source: null, tracks: [next], resumeAt: null });
+      start(next);
     },
-    [track],
+    [track, start],
   );
+
+  const playQueue = useCallback(
+    (tracks: Track[], clipId: number, source: string) => {
+      const next = tracks.find((t) => t.clipId === clipId);
+      if (!next) return;
+      setQueue({ source, tracks, resumeAt: null });
+      if (track?.clipId === clipId) {
+        // The same clip, perhaps now from its playlist: keep the place.
+        void waveSurferRef.current?.playPause();
+        return;
+      }
+      start(next);
+    },
+    [track, start],
+  );
+
+  const previous = useCallback(() => {
+    const ws = waveSurferRef.current;
+    const index = queue.tracks.findIndex((t) => t.clipId === track?.clipId);
+    const before = queue.tracks[index - 1];
+    if ((ws && ws.getCurrentTime() > RESTART_SECONDS) || !before) {
+      ws?.setTime(0);
+      return;
+    }
+    start(before);
+  }, [queue, track, start]);
+
+  const jumpTo = useCallback(
+    (clipId: number) => {
+      const next = queue.tracks.find((t) => t.clipId === clipId);
+      if (next) start(next);
+    },
+    [queue, start],
+  );
+
+  const setQueueTracks = useCallback((source: string, tracks: Track[]) => {
+    setQueue((q) =>
+      q.source === source
+        ? withTracks(q, tracks, trackRef.current?.clipId ?? null)
+        : q,
+    );
+  }, []);
+
+  const syncLabels = useCallback((clip: Track, labelNames: string[]) => {
+    setQueue((q) => {
+      if (q.source === null) return q;
+      const queued = q.tracks.some((t) => t.clipId === clip.clipId);
+      const labelled = labelNames.includes(q.source);
+      const current = trackRef.current?.clipId ?? null;
+      if (labelled && !queued) return withTracks(q, [...q.tracks, clip], current);
+      if (!labelled && queued) {
+        return withTracks(
+          q,
+          q.tracks.filter((t) => t.clipId !== clip.clipId),
+          current,
+        );
+      }
+      return q;
+    });
+  }, []);
 
   const toggle = useCallback(() => {
     void waveSurferRef.current?.playPause();
@@ -253,52 +486,75 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Closing the pane belongs here rather than in an effect watching for
-  // a null track: this is the only way a track becomes null, and a pane
-  // for a clip that has just been deleted has nothing to show.
-  const stop = useCallback(() => {
-    setTrack(null);
-    // Dropping the position too: stopping and then playing the same clip
-    // rebuilds the instance at zero, and a kept position would be read as
-    // still belonging to it until the first timeupdate.
-    setPlayed({ clipId: null, seconds: 0 });
-    setExpanded(false);
-  }, []);
+  const forget = useCallback(
+    (clipId: number) => {
+      if (trackRef.current?.clipId === clipId) {
+        stop();
+        return;
+      }
+      setQueue((q) =>
+        q.tracks.some((t) => t.clipId === clipId)
+          ? withTracks(q, q.tracks.filter((t) => t.clipId !== clipId), null)
+          : q,
+      );
+    },
+    [stop],
+  );
 
   const rename = useCallback((clipId: number, name: string) => {
     setTrack((current) =>
       current && current.clipId === clipId ? { ...current, name } : current,
     );
+    setQueue((q) => ({
+      ...q,
+      tracks: q.tracks.map((t) => (t.clipId === clipId ? { ...t, name } : t)),
+    }));
   }, []);
 
   const value = useMemo<PlayerContextValue>(
     () => ({
       track,
+      queue,
       isPlaying,
       currentTime,
       duration,
       progress: duration > 0 ? currentTime / duration : 0,
       repeat,
+      error,
       play,
+      playQueue,
+      next: advance,
+      previous,
+      jumpTo,
+      setQueueTracks,
+      syncLabels,
       toggle,
       seek,
       skip,
       setRepeat: changeRepeat,
-      stop,
+      forget,
       rename,
     }),
     [
       track,
+      queue,
       isPlaying,
       currentTime,
       duration,
       repeat,
+      error,
       play,
+      playQueue,
+      advance,
+      previous,
+      jumpTo,
+      setQueueTracks,
+      syncLabels,
       toggle,
       seek,
       skip,
       changeRepeat,
-      stop,
+      forget,
       rename,
     ],
   );
@@ -316,6 +572,17 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           would take the waveform host — the one node that has to outlive
           every change — down with it. */}
       {expanded && <PlayerPane onClose={() => setExpanded(false)} />}
+      {error !== null && (
+        <button
+          type="button"
+          className="player-error"
+          role="alert"
+          title="Dismiss"
+          onClick={() => setError(null)}
+        >
+          {error}
+        </button>
+      )}
     </PlayerContext>
   );
 }
@@ -407,7 +674,8 @@ function PlayerBar({
 
 /**
  * The player, opened up: the whole waveform, both times, and the
- * decisions that do not fit on one line of the bar.
+ * decisions that do not fit on one line of the bar. Laid out as the
+ * phone's sheet is.
  *
  * Its waveform is a canvas drawn from the stored peaks, not the bar's
  * WaveSurfer instance — that one is bound to a node which must not move.
@@ -417,6 +685,7 @@ function PlayerBar({
 function PlayerPane({ onClose }: { onClose: () => void }) {
   const {
     track,
+    queue,
     isPlaying,
     currentTime,
     duration,
@@ -425,6 +694,8 @@ function PlayerPane({ onClose }: { onClose: () => void }) {
     toggle,
     seek,
     skip,
+    next,
+    previous,
     setRepeat,
   } = usePlayer();
 
@@ -439,10 +710,21 @@ function PlayerPane({ onClose }: { onClose: () => void }) {
 
   if (!track) return null;
 
+  const subtitle = [
+    track.uploader,
+    track.recordingDate !== null ? `rec. ${track.recordingDate}` : null,
+  ]
+    .filter((part) => part)
+    .join(" · ");
+  const hasQueue = queue.tracks.length > 1;
+
   return (
     <div className="player-pane" role="dialog" aria-label="Player">
       <div className="pp-head">
-        <span className="pp-name">{track.name}</span>
+        <div className="pp-title">
+          <span className="pp-name">{track.name}</span>
+          {subtitle && <span className="pp-subtitle">{subtitle}</span>}
+        </div>
         <button
           type="button"
           className="pp-close"
@@ -478,6 +760,17 @@ function PlayerPane({ onClose }: { onClose: () => void }) {
         >
           −{SKIP_SECONDS}s
         </button>
+        {hasQueue && (
+          <button
+            type="button"
+            className="pp-step"
+            aria-label="Previous"
+            title="Previous"
+            onClick={previous}
+          >
+            ⏮
+          </button>
+        )}
         <button
           type="button"
           className="pp-play"
@@ -486,6 +779,17 @@ function PlayerPane({ onClose }: { onClose: () => void }) {
         >
           {isPlaying ? "⏸" : "▶"}
         </button>
+        {hasQueue && (
+          <button
+            type="button"
+            className="pp-step"
+            aria-label="Next"
+            title="Next"
+            onClick={next}
+          >
+            ⏭
+          </button>
+        )}
         <button
           type="button"
           className="pp-skip"
@@ -494,10 +798,57 @@ function PlayerPane({ onClose }: { onClose: () => void }) {
         >
           +{SKIP_SECONDS}s
         </button>
-        <a className="pp-open" href={track.clipHref}>
-          Open clip
-        </a>
       </div>
+
+      {queue.source !== null && <QueueList />}
+
+      <a className="pp-open" href={track.clipHref}>
+        Open clip
+      </a>
+    </div>
+  );
+}
+
+/** "Playing from verse-1 — 3 of 8", opening into the tracks themselves. */
+function QueueList() {
+  const { track, queue, jumpTo } = usePlayer();
+  const [open, setOpen] = useState(false);
+
+  const index = queue.tracks.findIndex((t) => t.clipId === track?.clipId);
+
+  return (
+    <div className="pp-queue">
+      <button
+        type="button"
+        className="pp-queue-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        Playing from <strong>{queue.source}</strong>
+        {index !== -1 && ` — ${index + 1} of ${queue.tracks.length}`}
+        <span className="pp-queue-caret">{open ? "▴" : "▾"}</span>
+      </button>
+      {open && (
+        <ol className="pp-queue-list">
+          {queue.tracks.map((t) => (
+            <li key={t.clipId}>
+              <button
+                type="button"
+                className={
+                  t.clipId === track?.clipId ? "pp-queue-row current" : "pp-queue-row"
+                }
+                aria-current={t.clipId === track?.clipId}
+                onClick={() => jumpTo(t.clipId)}
+              >
+                <span className="pp-queue-name">{t.name}</span>
+                <span className="pp-queue-time">
+                  {t.durationSeconds !== null ? formatTime(t.durationSeconds) : ""}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ol>
+      )}
     </div>
   );
 }

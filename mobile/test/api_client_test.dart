@@ -48,6 +48,33 @@ void main() {
     );
   });
 
+  test('a playlist arrives in order, with its length', () async {
+    final fake = FakeHttpClient.json({
+      'labelId': 4,
+      'labelName': 'set',
+      'totalSeconds': 90.5,
+      'clips': [clipJson(id: 3), clipJson(id: 1, name: 'intro')],
+    });
+    final playlist = await apiWith(fake).playlist(4);
+
+    expect(fake.lastRequest.url.path, '/api/v1/labels/4/playlist');
+    expect(playlist.clips.map((c) => c.id), [3, 1]);
+    expect(playlist.total, const Duration(milliseconds: 90500));
+  });
+
+  test('a reorder names the neighbour, and a move to the front names none',
+      () async {
+    final fake = FakeHttpClient.json({
+      'order': [2, 1]
+    });
+    final order = await apiWith(fake).reorderPlaylist(4, 2, null);
+
+    expect(fake.lastRequest.method, 'POST');
+    expect(fake.lastRequest.url.path, '/api/v1/labels/4/order');
+    expect(jsonDecode(fake.lastRequest.body), {'clipId': 2, 'afterClipId': null});
+    expect(order, [2, 1]);
+  });
+
   test('a clip without peaks is parsed, not rejected', () async {
     final fake = FakeHttpClient.json(clipJson(peaks: null, durationSeconds: null));
     final clip = await apiWith(fake).clip(1);

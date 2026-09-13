@@ -78,11 +78,22 @@ export interface LabelSearchResult {
 
 // --- Per-page props, embedded in the HTML by the server ---------------
 
+/** The heading of a playlist view, and the marker that a list is one. */
+export interface PlaylistInfo {
+  labelId: number;
+  labelName: string;
+  /** Summed over the clips whose duration is known. */
+  totalSeconds: number;
+}
+
 export interface IndexProps {
   username: string;
+  /** In playlist order when `playlist` is set, newest first otherwise. */
   clips: ClipSummary[];
   activeFilters: FilterChip[];
   activeWikis: WikiPage[];
+  /** Set only when exactly one existing label is filtered on. */
+  playlist: PlaylistInfo | null;
 }
 
 export interface ClipProps {

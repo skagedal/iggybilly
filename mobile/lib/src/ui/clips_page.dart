@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
@@ -18,6 +20,11 @@ import 'wiki_page.dart';
 /// widens. Tapping a label on a row adds it to the filter, which is the
 /// quickest way to get from "here is a clip" to "here is everything like
 /// it".
+///
+/// With exactly one label the list is that label's playlist: in the
+/// band's order, reorderable by a long press on a row's handle, and
+/// played as a queue. Several labels have no order to choose between, so
+/// they stay newest first.
 class ClipsPage extends StatefulWidget {
   const ClipsPage({super.key, this.initialFilters = const []});
 
@@ -31,6 +38,9 @@ class _ClipsPageState extends State<ClipsPage> {
   late List<String> _filters = List.of(widget.initialFilters);
 
   List<Clip>? _clips;
+
+  /// Set when the list is one label's playlist.
+  Playlist? _playlist;
   List<WikiPage> _wikis = const [];
   String? _error;
   bool _loading = true;
@@ -49,7 +59,26 @@ class _ClipsPageState extends State<ClipsPage> {
     });
     final api = sessionOf(context).api;
     try {
-      final clips = await api.clips(labels: _filters);
+      var clips = await api.clips(labels: _filters);
+      Playlist? playlist;
+      if (_filters.length == 1) {
+        // The playlist is its own route, addressed by label id, and the
+        // filter is a name: the clips just fetched carry the id.
+        final filter = _filters.single.toLowerCase();
+        final label = clips
+            .expand((c) => c.labels)
+            .where((l) => l.name.toLowerCase() == filter)
+            .firstOrNull;
+        if (label != null) {
+          try {
+            playlist = await api.playlist(label.id);
+            clips = playlist.clips;
+          } on ApiException catch (e) {
+            // A server from before playlists: the plain list it is.
+            if (e.statusCode != 404) rethrow;
+          }
+        }
+      }
       // The wiki page for each active filter, shown above the clips —
       // a filtered list is a subject, and the subject's notes belong
       // with it. Resolved from the clips we already have, so a filter
@@ -69,8 +98,16 @@ class _ClipsPageState extends State<ClipsPage> {
       }
 
       if (!mounted) return;
+      if (playlist != null) {
+        // A queue playing from this label is this list, so a reload is
+        // how it learns of clips that gained or lost the label elsewhere.
+        unawaited(AppScope.of(context)
+            .player
+            .setQueueTracks(playlist.labelName, clips));
+      }
       setState(() {
         _clips = clips;
+        _playlist = playlist;
         _wikis = wikis;
         _loading = false;
       });
@@ -105,6 +142,50 @@ class _ClipsPageState extends State<ClipsPage> {
     // The clip page can rename, relabel or delete; rather than trying to
     // reconcile that here, reload when it says something changed.
     if (changed == true) await _load();
+  }
+
+  /// Move a row, then tell the server. The list moves first and the
+  /// server's answer is what it settles on; a refusal springs it back.
+  Future<void> _reorder(int oldIndex, int newIndex) async {
+    final playlist = _playlist;
+    final from = _clips;
+    if (playlist == null || from == null || newIndex == oldIndex) return;
+
+    final to = List.of(from);
+    final clip = to.removeAt(oldIndex);
+    to.insert(newIndex, clip);
+    final afterClipId = newIndex == 0 ? null : to[newIndex - 1].id;
+
+    final session = sessionOf(context);
+    final player = AppScope.of(context).player;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _clips = to);
+    unawaited(player.setQueueTracks(playlist.labelName, to));
+
+    try {
+      final order =
+          await session.api.reorderPlaylist(playlist.labelId, clip.id, afterClipId);
+      if (!mounted) return;
+      final byId = {for (final c in to) c.id: c};
+      final settled = [
+        for (final id in order)
+          if (byId[id] != null) byId[id]!,
+      ];
+      setState(() => _clips = settled);
+      unawaited(player.setQueueTracks(playlist.labelName, settled));
+    } on ApiException catch (e) {
+      if (e.isUnauthorized) {
+        await session.handleUnauthorized();
+        return;
+      }
+      if (!mounted) return;
+      setState(() => _clips = from);
+      unawaited(player.setQueueTracks(playlist.labelName, from));
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+      // The server answered, so the list this move was made against is
+      // out of date. Show the one that exists.
+      if (e.statusCode != null) await _load();
+    }
   }
 
   Future<void> _upload() async {
@@ -181,7 +262,48 @@ class _ClipsPageState extends State<ClipsPage> {
                   : 'No clips carry all of those labels.',
             ),
           )
-        else
+        else if (_playlist != null) ...[
+          SliverToBoxAdapter(
+            child: _PlaylistHeading(playlist: _playlist!, clips: clips),
+          ),
+          SliverReorderableList(
+            itemCount: clips.length,
+            onReorderItem: _reorder,
+            proxyDecorator: (child, _, _) =>
+                Material(elevation: 4, child: child),
+            itemBuilder: (context, i) => Column(
+              key: ValueKey(clips[i].id),
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _ClipRow(
+                  clip: clips[i],
+                  player: player,
+                  activeFilters: _filters,
+                  onOpen: () => _openClip(clips[i]),
+                  onLabelTapped: _addFilter,
+                  onPlay: () {
+                    final api = sessionOf(context).api;
+                    player.playQueue(
+                      clips,
+                      clips[i].id,
+                      source: _playlist!.labelName,
+                      urlFor: (c) => api.resolve(c.audioPath),
+                      headers: api.authHeaders,
+                    );
+                  },
+                  handle: ReorderableDelayedDragStartListener(
+                    index: i,
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                      child: Icon(Icons.drag_handle, semanticLabel: 'Reorder'),
+                    ),
+                  ),
+                ),
+                const Divider(height: 1),
+              ],
+            ),
+          ),
+        ] else
           SliverList.separated(
             itemCount: clips.length,
             separatorBuilder: (_, _) => const Divider(height: 1),
@@ -207,9 +329,17 @@ class _ClipRow extends StatelessWidget {
     required this.activeFilters,
     required this.onOpen,
     required this.onLabelTapped,
+    this.onPlay,
+    this.handle,
   });
 
   final Clip clip;
+
+  /// Instead of playing the clip on its own.
+  final VoidCallback? onPlay;
+
+  /// The drag handle, in a playlist.
+  final Widget? handle;
   final PlayerController player;
   final List<String> activeFilters;
   final VoidCallback onOpen;
@@ -238,11 +368,12 @@ class _ClipRow extends StatelessWidget {
                   icon: Icon(isPlaying ? Icons.pause_circle : Icons.play_circle,
                       size: 34),
                   color: isLoaded ? theme.colorScheme.primary : null,
-                  onPressed: () => player.play(
-                    clip,
-                    session.api.resolve(clip.audioPath),
-                    headers: session.api.authHeaders,
-                  ),
+                  onPressed: onPlay ??
+                      () => player.play(
+                            clip,
+                            session.api.resolve(clip.audioPath),
+                            headers: session.api.authHeaders,
+                          ),
                 ),
                 Expanded(
                   child: Column(
@@ -288,6 +419,7 @@ class _ClipRow extends StatelessWidget {
                     ],
                   ),
                 ),
+                ?handle,
               ],
             ),
           ),
@@ -303,6 +435,46 @@ class _ClipRow extends StatelessWidget {
     if (clip.recordingDate != null) parts.add('rec. ${clip.recordingDate}');
     if (clip.duration != null) parts.add(formatDuration(clip.duration!));
     return parts.join(' · ');
+  }
+}
+
+/// The playlist's name, its length in clips, and its length in time.
+class _PlaylistHeading extends StatelessWidget {
+  const _PlaylistHeading({required this.playlist, required this.clips});
+
+  final Playlist playlist;
+  final List<Clip> clips;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final unknown = clips.where((c) => c.duration == null).length;
+    final parts = <String>[
+      clips.length == 1 ? '1 clip' : '${clips.length} clips',
+      if (unknown < clips.length)
+        unknown == 0
+            ? formatDuration(playlist.total)
+            : '${formatDuration(playlist.total)} ($unknown unknown)',
+    ];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: Row(
+        children: [
+          Icon(Icons.queue_music, size: 18, color: theme.colorScheme.primary),
+          const SizedBox(width: 6),
+          Text(playlist.labelName, style: theme.textTheme.titleSmall),
+          Expanded(
+            child: Text(
+              '  ·  ${parts.join(' · ')}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.outline),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

@@ -197,9 +197,38 @@ button:disabled { opacity: 0.6; cursor: default; filter: none; }
 
 .clip-card {
   list-style: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
   padding: 0.75rem 0;
   border-bottom: 1px solid var(--border);
 }
+.clip-body { flex: 1 1 auto; min-width: 0; }
+
+/* A playlist view: one label, its clips in the band's order. */
+.playlist-head { margin: 0.5rem 0; color: var(--muted); }
+.playlist-head strong { color: var(--fg); }
+.clip-card .drag-handle {
+  flex: 0 0 auto;
+  align-self: center;
+  padding: 0.25rem 0.3rem;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--muted);
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: grab;
+  touch-action: none;
+}
+.clip-card .drag-handle:hover { color: var(--fg); background: #f0f0f0; }
+.clip-card .drag-handle:active { cursor: grabbing; }
+/* Held by the keyboard: arrows move it until Space puts it down. */
+.clip-card .drag-handle[aria-pressed="true"] {
+  color: white;
+  background: var(--accent);
+}
+.clip-card.dragging { opacity: 0.5; }
 .clip-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 1rem; }
 
 .mini-player {
@@ -468,12 +497,17 @@ body.has-player { padding-bottom: 5rem; }
   align-items: flex-start;
   gap: 0.75rem;
 }
-.pp-name {
+.pp-title {
   flex: 1 1 auto;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.pp-name {
   font-size: 1.15rem;
   font-weight: 700;
 }
+.pp-subtitle { color: var(--muted); font-size: 0.85rem; }
 .pp-close {
   flex: 0 0 auto;
   padding: 0 0.4rem;
@@ -512,6 +546,11 @@ body.has-player { padding-bottom: 5rem; }
   font-family: ui-monospace, monospace;
   font-size: 0.85rem;
 }
+.pp-step {
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 0.35rem 0.6rem;
+}
 /* Repeat is a state, not an action, so it stays lit while it is on. */
 .pp-repeat {
   font-size: 1.2rem;
@@ -524,12 +563,68 @@ body.has-player { padding-bottom: 5rem; }
   color: white;
 }
 .pp-open {
-  margin-left: auto;
+  align-self: center;
   color: var(--accent);
   font-size: 0.9rem;
 }
-@media (max-width: 480px) {
-  .pp-open { margin-left: 0; }
+
+.pp-queue { border-top: 1px solid var(--border); padding-top: 0.5rem; }
+.pp-queue-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  padding: 0.25rem 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.9rem;
+  text-align: left;
+  cursor: pointer;
+}
+.pp-queue-toggle strong { color: var(--fg); }
+.pp-queue-caret { margin-left: auto; }
+.pp-queue-list {
+  list-style: none;
+  margin: 0.25rem 0 0;
+  padding: 0;
+  max-height: 14rem;
+  overflow-y: auto;
+}
+.pp-queue-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  width: 100%;
+  padding: 0.3rem 0.5rem;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.9rem;
+  text-align: left;
+  cursor: pointer;
+}
+.pp-queue-row:hover { background: #f0f4f2; }
+.pp-queue-row.current { color: var(--accent); font-weight: 600; }
+.pp-queue-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-queue-time { flex: 0 0 auto; color: var(--muted); font-family: ui-monospace, monospace; }
+
+/* Sits where the bar would be: a failure can leave nothing loaded. */
+.player-error {
+  position: fixed;
+  left: 50%;
+  bottom: 1rem;
+  transform: translateX(-50%);
+  padding: 0.5rem 1rem;
+  border: 0;
+  border-radius: 6px;
+  background: var(--error);
+  color: white;
+  z-index: 70;
+  cursor: pointer;
 }
 
 /* Thin bar across the top while a client navigation is in flight. It

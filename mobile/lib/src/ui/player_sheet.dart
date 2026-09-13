@@ -102,6 +102,7 @@ class PlayerSheet extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 _Controls(player: player),
+                if (player.queueSource != null) _QueueTile(player: player),
                 const SizedBox(height: 8),
                 KeepDownloadedTile(clip: clip, dense: true),
                 if (onOpenClip != null)
@@ -147,16 +148,17 @@ class _Controls extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // Evenly spaced rather than centred with a counterweight: four
-    // buttons spread across the row reads as a row of controls, and needs
-    // no invisible box to keep play in the middle.
+    // Evenly spaced rather than centred with a counterweight: buttons
+    // spread across the row read as a row of controls, and need no
+    // invisible box to keep play in the middle. Previous and next are
+    // left out, not disabled, when there is nothing to go to.
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
         IconButton(
           tooltip: player.repeat ? 'Stop repeating' : 'Repeat',
           onPressed: player.toggleRepeat,
-          icon: Icon(player.repeat ? Icons.repeat_one : Icons.repeat),
+          icon: const Icon(Icons.repeat),
           color: player.repeat ? theme.colorScheme.primary : null,
         ),
         IconButton(
@@ -165,18 +167,119 @@ class _Controls extends StatelessWidget {
           onPressed: () => player.skip(-_skip),
           icon: const Icon(Icons.replay_10),
         ),
+        if (player.hasQueue)
+          IconButton(
+            tooltip: 'Previous',
+            iconSize: 30,
+            onPressed: player.previous,
+            icon: const Icon(Icons.skip_previous),
+          ),
         IconButton.filled(
           iconSize: 44,
           tooltip: player.isPlaying ? 'Pause' : 'Play',
           onPressed: player.toggle,
           icon: Icon(player.isPlaying ? Icons.pause : Icons.play_arrow),
         ),
+        if (player.hasQueue)
+          IconButton(
+            tooltip: 'Next',
+            iconSize: 30,
+            onPressed: player.next,
+            icon: const Icon(Icons.skip_next),
+          ),
         IconButton(
           tooltip: 'Forward 10 seconds',
           iconSize: 30,
           onPressed: () => player.skip(_skip),
           icon: const Icon(Icons.forward_10),
         ),
+      ],
+    );
+  }
+}
+
+/// "Playing from verse-1 — 3 of 8", opening into the queue itself.
+///
+/// The list is the playlist, live: a reorder landing while it is open
+/// moves the row, because it is read from the player on every build.
+class _QueueTile extends StatefulWidget {
+  const _QueueTile({required this.player});
+
+  final PlayerController player;
+
+  @override
+  State<_QueueTile> createState() => _QueueTileState();
+}
+
+class _QueueTileState extends State<_QueueTile> {
+  bool _open = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final player = widget.player;
+    final index = player.queueIndex;
+    final queue = player.queue;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        InkWell(
+          onTap: () => setState(() => _open = !_open),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text.rich(
+                    TextSpan(
+                      text: 'Playing from ',
+                      children: [
+                        TextSpan(
+                          text: player.queueSource,
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        if (index != -1)
+                          TextSpan(text: ' — ${index + 1} of ${queue.length}'),
+                      ],
+                    ),
+                    style: theme.textTheme.bodyMedium,
+                  ),
+                ),
+                Icon(_open ? Icons.expand_less : Icons.expand_more),
+              ],
+            ),
+          ),
+        ),
+        if (_open)
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 240),
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: queue.length,
+              itemBuilder: (context, i) {
+                final clip = queue[i];
+                final current = i == index;
+                return ListTile(
+                  dense: true,
+                  selected: current,
+                  leading: current
+                      ? const Icon(Icons.graphic_eq, size: 18)
+                      : const SizedBox(width: 18),
+                  title: Text(
+                    clip.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  trailing: clip.duration == null
+                      ? null
+                      : Text(formatDuration(clip.duration!)),
+                  onTap: () => player.jumpTo(clip.id),
+                );
+              },
+            ),
+          ),
       ],
     );
   }

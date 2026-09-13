@@ -75,7 +75,7 @@ class PlayerBar extends StatelessWidget {
                               ),
                               if (player.repeat)
                                 Icon(
-                                  Icons.repeat_one,
+                                  Icons.repeat,
                                   size: 14,
                                   color: theme.colorScheme.primary,
                                 ),

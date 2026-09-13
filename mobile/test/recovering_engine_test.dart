@@ -101,21 +101,21 @@ void main() {
     expect(heard, [true, false, true]);
   });
 
-  test('repeat is re-applied to a replacement', () async {
-    await engine.setRepeat(true);
+  test('looping is re-applied to a replacement', () async {
+    await engine.setLoopCurrent(true);
     // Nothing to tell yet — the player is built on the first load.
     expect(built, isEmpty);
 
     await engine.load(url);
     await pumpEventQueue();
-    expect(built.single.repeat, isTrue);
+    expect(built.single.loop, isTrue);
 
     built.last.loadError = Exception('wedged');
     await engine.load(other);
     await pumpEventQueue();
 
     expect(built.length, 2);
-    expect(built.last.repeat, isTrue, reason: 'a new player has forgotten it');
+    expect(built.last.loop, isTrue, reason: 'a new player has forgotten it');
   });
 
   test('disposing takes the current player with it', () async {

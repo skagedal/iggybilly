@@ -42,7 +42,7 @@ class RecoveringAudioEngine implements AudioEngine {
 
   /// Re-applied to every replacement: loop mode belongs to the player,
   /// and a new player has forgotten it.
-  bool _repeat = false;
+  bool _loop = false;
   bool _disposed = false;
 
   @override
@@ -77,9 +77,9 @@ class RecoveringAudioEngine implements AudioEngine {
   Future<void> stop() async => _delegate?.stop();
 
   @override
-  Future<void> setRepeat(bool repeat) async {
-    _repeat = repeat;
-    await _delegate?.setRepeat(repeat);
+  Future<void> setLoopCurrent(bool loop) async {
+    _loop = loop;
+    await _delegate?.setLoopCurrent(loop);
   }
 
   @override
@@ -121,7 +121,7 @@ class RecoveringAudioEngine implements AudioEngine {
       delegate.durations.listen(_durations.add),
       delegate.completions.listen(_completions.add),
     ]);
-    if (_repeat) unawaited(delegate.setRepeat(true));
+    if (_loop) unawaited(delegate.setLoopCurrent(true));
     return delegate;
   }
 

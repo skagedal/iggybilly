@@ -431,7 +431,7 @@ both and lets the answer carry `uploadedBy` rather than a per-user
   "wikis": [{
     "labelId": 4,
     "revisionId": 31,                // what a save from this page must cite as its base
-    "content": "…",                  // Markdown source, for the editor
+    "content": "…",                  // the document written out as Markdown, for the editor
     "lastEditedBy": "anna",
     "lastEditedAt": "2026-06-01T10:02:11.000Z"
   }],
@@ -471,7 +471,12 @@ an optional `baseRevisionId`:
 ```
 
 When present, the save goes through only if the label's newest revision
-is that one (`null` meaning "no page yet"). Otherwise the answer is
+is that one (`null` meaning "no page yet"). If it is not, but the
+submitted text parses to exactly the document the page now holds, the
+save is already done — typically this same save, sent again after its
+answer was lost — and the answer is `200` with the page, writing
+nothing. Comparing documents rather than text is what makes this work
+once the server normalises what it stores. Otherwise the answer is
 `409` with the page as it now stands:
 
 ```json
@@ -715,7 +720,7 @@ routes the app already calls:
 | `addLabel` | `POST /api/v1/clips/{id}/labels` | sent again; the server's insert is `OR IGNORE` |
 | `removeLabel` | `DELETE /api/v1/clips/{id}/labels/{labelId}` | sent again; deleting nothing is nothing |
 | `reorder` | `POST /api/v1/labels/{id}/order` | sent again; the same neighbour gives the same order |
-| `saveWiki` | `POST /api/v1/labels/{id}/wiki` with `baseRevisionId` | sent again and answered 409; if the current page's content is what we sent, it landed |
+| `saveWiki` | `POST /api/v1/labels/{id}/wiki` with `baseRevisionId` | sent again; the server answers 200 when what we sent parses to the page as it now stands, so it landed |
 | `deleteClip` | `DELETE /api/v1/clips/{id}` | sent again and answered 404, which is done |
 
 The right-hand column is the case where the server applied a write and

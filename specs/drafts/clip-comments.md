@@ -1,8 +1,21 @@
 # Comments anchored to a point in a clip
 
 Implements [#6](https://github.com/skagedal/iggybilly/issues/6).
-Complements [001](../implemented/001-label-wiki.md), whose storage
-decision it reuses.
+
+> **Blocked.** Two things come first, by decision:
+> [structured-document-storage](structured-document-storage.md) and
+> [local-first](local-first.md)
+> ([#24](https://github.com/skagedal/iggybilly/issues/24)). Comments are
+> authored text, so the storage question below is settled by the first
+> of those and not here. They are also what people will write offline,
+> so they are where sync and conflict resolution first bite. Starting
+> here would mean building both foundations twice.
+>
+> Two sections of this draft are therefore **out of date as written** and
+> are to be rewritten on top of those specs when this is picked up:
+> "Writing, editing, deleting", on storing Markdown source, and "Failure
+> and offline", which says comments are network-only and nothing is
+> queued. Everything else stands.
 
 The thing worth saying about a clip is almost always about a moment in
 it: the entry is late, that chord is wrong, do that again. Saying it in
@@ -14,11 +27,15 @@ Every comment is also posted to Discord, because that is where the band
 already talks and a comment nobody sees is not worth writing.
 
 Comments resemble wiki pages in shape — user-authored text hanging off
-something else, with an author and a time — and borrow their storage
-decision wholesale: Markdown source in the column, rendered on read by
-each surface. See [spec 001](../implemented/001-label-wiki.md), which
-sets out why. The one place they differ is versioning: a wiki page keeps
-every revision and a comment does not.
+something else, with an author and a time — and take their storage from
+whatever wiki pages use. At the time this draft was written that meant
+Markdown source in the column, per
+[spec 001](../implemented/001-label-wiki.md); it now means a parsed
+document, per
+[structured-document-storage](structured-document-storage.md). The
+sections below still say the former and are the part to rewrite. The one
+place comments differ either way is versioning: a wiki page keeps every
+revision and a comment does not.
 
 ## Functionality
 

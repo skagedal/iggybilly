@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+#
+# Draw the development build's icon: the guitar with a DEV band across the
+# bottom, as an icon set of its own beside AppIcon. local/build-to-phone
+# selects it.
+#
+#   ./tool/make-dev-icon
+#
+# Needs appicon-generator from skagedal-tools, new enough to have --badge.
+
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+
+command -v appicon-generator >/dev/null 2>&1 || {
+    echo "make-dev-icon: appicon-generator not found on PATH. Install it from skagedal-tools." >&2
+    exit 1
+}
+
+cd "$root"
+appicon-generator \
+    --mode ios \
+    --output mobile/ios/Runner/Assets.xcassets \
+    --icon-set AppIcon-Dev \
+    --badge DEV \
+    🎸

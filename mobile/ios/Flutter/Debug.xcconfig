@@ -1,2 +1,10 @@
 #include "Generated.xcconfig"
+
+// Which app this is. Set here rather than in the project so that
+// Signing.xcconfig can override them: local/build-to-phone installs a
+// development build under its own id, beside the TestFlight one.
+PRODUCT_BUNDLE_IDENTIFIER = tech.skagedal.iggybilly
+ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon
+APP_DISPLAY_NAME = iggybilly
+
 #include? "Signing.xcconfig"

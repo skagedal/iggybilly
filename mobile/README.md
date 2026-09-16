@@ -121,6 +121,15 @@ made by `./local/run create-user <name>`.
     ../local/build-to-phone            # release
     ../local/build-to-phone --debug
 
+What it installs is **iggybilly Dev**: the same app under the bundle id
+`tech.skagedal.iggybilly.dev`, with a DEV band on its icon, so it sits
+beside the TestFlight build instead of replacing it. The two share nothing
+— each has its own settings, its own sign-in and its own downloaded
+tracks. The first build under that id has Xcode register it with Apple;
+nothing needs setting up in App Store Connect. The id, the icon set and
+the name are defaults in `Debug.xcconfig` and `Release.xcconfig`, which
+the dev build overrides, and the icon is drawn by `../tool/make-dev-icon`.
+
 It needs `local/devices.env`, which says which phone and which Apple team
 to sign with. That file is gitignored, because this repository is public
 and those values are personal — copy `local/devices.env.example`, or

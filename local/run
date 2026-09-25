@@ -44,14 +44,14 @@ command -v cargo >/dev/null 2>&1 || die \
 # install, which makes it a good timestamp for "the tree matches the
 # lockfile".
 stamp="$web/node_modules/.modules.yaml"
-if [ ! -f "$stamp" ] || [ -n "$(newer-than "$stamp" "$web/pnpm-lock.yaml" "$web/package.json5")" ]; then
+if [ ! -f "$stamp" ] || [ -n "$(newer-than "$stamp" "$web/pnpm-lock.yaml" "$web/package.yaml")" ]; then
     echo "local/run: installing frontend dependencies" >&2
     (cd "$web" && pnpm install)
 fi
 
 # An unminified build with sourcemaps — this is the development entry
 # point, so a readable stack trace is worth more than a small bundle.
-if [ ! -f "$manifest" ] || [ -n "$(newer-than "$manifest" "$web/src" "$web/build.mjs" "$web/package.json5")" ]; then
+if [ ! -f "$manifest" ] || [ -n "$(newer-than "$manifest" "$web/src" "$web/build.mjs" "$web/package.yaml")" ]; then
     echo "local/run: building frontend" >&2
     (cd "$web" && pnpm run build:dev)
 fi

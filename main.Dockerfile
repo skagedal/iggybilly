@@ -9,11 +9,12 @@ WORKDIR /web
 
 # pnpm comes from corepack, which ships with the node image. The version
 # is named here rather than read from the manifest: corepack looks for a
-# `packageManager` field in package.json, and ours is package.json5.
-RUN corepack enable && corepack prepare pnpm@10.33.0 --activate
+# `packageManager` field in package.json, and ours is package.yaml. Keep it
+# in step with the `packageManager` field there.
+RUN corepack enable && corepack prepare pnpm@12.5.1 --activate
 
 # Deps first so a source-only change doesn't re-run the install.
-COPY web/package.json5 web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
+COPY web/package.yaml web/pnpm-lock.yaml web/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY web/ ./

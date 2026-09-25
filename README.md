@@ -176,8 +176,8 @@ checks — `flutter analyze` and `flutter test` — run in CI too, against
 the SDK version pinned in `mobile/.fvmrc`.
 
 The frontend uses **pnpm**, not npm, and its manifest is
-`web/package.json5` — pnpm reads JSON5 natively, so there is no
-`package.json` to keep in sync.
+`web/package.yaml` — pnpm reads YAML natively, so there is no
+`package.json` to keep in sync, and the manifest can carry comments.
 
 The Rust tests don't need the frontend built — without a manifest the
 shell falls back to unhashed bundle paths, which is fine for asserting
@@ -224,7 +224,7 @@ Each part is that ecosystem's own update command; the script is only the
 thing that knows where they all live. No manifest is written by it.
 `Cargo.toml` and `mobile/pubspec.yaml` carry ranges, so their lock files
 move underneath them and crossing a major bound stays a deliberate edit.
-`web/package.json5` asks for `"latest"` instead — there the lock file is
+`web/package.yaml` asks for `"latest"` instead — there the lock file is
 the whole pin, and pnpm crosses majors on its own. The two things with no
 lock file at all work the same way: for the SDK pin and the actions the
 pinned version *is* the range, so those move across majors too.

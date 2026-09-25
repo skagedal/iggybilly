@@ -225,7 +225,7 @@ Success response is unchanged: `{clips: [{id, name}]}`.
 ### Web
 
 `wavesurfer.js` is already a dependency and ships the record plugin in
-the same package, so `web/package.json5` does not change. Import it as
+the same package, so `web/package.yaml` does not change. Import it as
 `wavesurfer.js/dist/plugins/record.esm.js`.
 
 - `web/src/components/Recorder.tsx` — new, and the whole feature on this

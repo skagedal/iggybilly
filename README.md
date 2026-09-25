@@ -221,9 +221,8 @@ pinned in `mobile/.fvmrc`, and the actions in `.github/workflows`:
     ./ci/update-dependencies --dry-run       # print the commands, run none of them
 
 `.github/workflows/update-dependencies.yml` runs the same script every Monday
-and opens a pull request when something moved, so the weekly update arrives
-on its own rather than from a sweep over my checkouts. CI on that pull
-request is what says whether the update builds.
+and opens a pull request when something moved. CI on that pull request is
+what says whether the update builds.
 
 Each part is that ecosystem's own update command; the script is only the
 thing that knows where they all live. No manifest is written by it.

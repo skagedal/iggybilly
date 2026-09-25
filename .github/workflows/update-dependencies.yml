@@ -1,9 +1,7 @@
 name: Update dependencies
 
 on:
-  # Weekly, the cadence the `update-personal-dependencies` task in
-  # simons-assistant ran this script at. Monday morning, so a week of updates
-  # is waiting at the start of the week.
+  # Monday morning, so a week of updates is waiting at the start of the week.
   schedule:
     - cron: "40 5 * * 1"
   workflow_dispatch: {}

@@ -71,33 +71,7 @@ jobs:
           dart pub global activate fvm
           echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
 
-      # There is no action that only installs pinact — the one its author
-      # ships wants to do the pinning and the committing itself — so the
-      # release binary is fetched directly. The version is pinned and the
-      # download checked against the checksums file published with the
-      # release, for the same reason the actions here are pinned to SHAs.
-      # Bumping PINACT_VERSION is a manual edit; nothing updates it.
-      - name: Install pinact
-        env:
-          PINACT_VERSION: 5.0.0
-        run: |
-          set -euo pipefail
-          case "$(uname -s)-$(uname -m)" in
-              Linux-x86_64) asset="pinact_linux_amd64.tar.gz" ;;
-              Darwin-arm64) asset="pinact_darwin_arm64.tar.gz" ;;
-              *) echo "no pinact build for $(uname -s)-$(uname -m)" >&2; exit 1 ;;
-          esac
-          checksums="pinact_${PINACT_VERSION}_checksums.txt"
-          base="https://github.com/suzuki-shunsuke/pinact/releases/download/v${PINACT_VERSION}"
-          # In a temporary directory, not the checkout: anything left lying
-          # around in the working tree would be swept into the commit below.
-          cd "$(mktemp -d)"
-          curl -fsSL -O "$base/$asset" -O "$base/$checksums"
-          shasum -a 256 --ignore-missing -c "$checksums"
-          tar xzf "$asset" pinact
-          mkdir -p "$RUNNER_TEMP/bin"
-          install -m 0755 pinact "$RUNNER_TEMP/bin/pinact"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - uses: skagedal/action-pinact-setup@0e686abf491418977fb6de9e8ba8ce17104e288a # v1.0.0
 
       - name: Run ci/update-dependencies
         env:

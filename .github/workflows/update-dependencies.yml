@@ -6,9 +6,9 @@ on:
     - cron: "40 5 * * 1"
   workflow_dispatch: {}
 
-# The branch is pushed and the pull request opened with UPDATES_TOKEN, so the
-# workflow's own token needs nothing beyond reading the repository — pinact is
-# the only thing that uses it, for the GitHub API.
+# The branch is pushed and the pull request opened with a GitHub App's token,
+# so the workflow's own token needs nothing beyond reading the repository —
+# pinact is the only thing that uses it, for the GitHub API.
 permissions:
   contents: read
 
@@ -17,13 +17,28 @@ jobs:
     name: Update dependencies and open a pull request
     runs-on: ubuntu-latest
     steps:
+      # The pull request comes from a GitHub App rather than from me, for two
+      # reasons. GitHub does not notify me of anything I did myself, so a pull
+      # request of my own would arrive in silence; one from the App can ask
+      # for my review, and that notifies me. And unlike the workflow's own
+      # GITHUB_TOKEN, a push made with the App's token triggers workflows, so
+      # CI runs on the pull request — which is what checks that the update
+      # builds. The token covers this repository only, carries only what the
+      # steps below need, and is revoked when the job ends.
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          client-id: ${{ vars.UPDATES_APP_CLIENT_ID }}
+          private-key: ${{ secrets.UPDATES_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          # pinact edits the pins in .github/workflows, and GitHub refuses a
+          # push that touches workflow files without this.
+          permission-workflows: write
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # UPDATES_TOKEN, not the default GITHUB_TOKEN: GitHub deliberately
-          # does not trigger workflows on a push made with GITHUB_TOKEN, so CI
-          # would never run on the pull request this opens — and CI running on
-          # it is what checks that the update builds.
-          token: ${{ secrets.UPDATES_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -107,15 +122,18 @@ jobs:
       - name: Open a pull request
         if: steps.changed.outputs.any == 'true'
         env:
-          GH_TOKEN: ${{ secrets.UPDATES_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
           set -euo pipefail
           today="$(date -u +%F)"
           branch="updates-$today"
-          # The commit is the bot's; the push is the token's. Which identity
-          # pushes is what decides whether CI runs, and that has to be the PAT.
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Commit as the App, so the commits on the branch belong to the same
+          # identity that pushes them and opens the pull request.
+          bot="${APP_SLUG}[bot]"
+          bot_id="$(gh api "/users/$bot" --jq .id)"
+          git config user.name "$bot"
+          git config user.email "${bot_id}+${bot}@users.noreply.github.com"
           git switch -c "$branch"
           git add -A
           git commit -m "Update dependencies, $today"
@@ -135,10 +153,8 @@ jobs:
               git --no-pager diff --stat 'HEAD^'
               echo '```'
           } >"$RUNNER_TEMP/pr-body.md"
-          # Assigned rather than review-requested: the pull request is opened
-          # with my own token, so I am its author, and GitHub will not let an
-          # author request their own review.
+          # The review request is what reaches me as a notification.
           gh pr create \
               --title "Update dependencies, $today" \
               --body-file "$RUNNER_TEMP/pr-body.md" \
-              --assignee skagedal
+              --reviewer skagedal

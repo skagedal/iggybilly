@@ -1,0 +1,146 @@
+name: Update dependencies
+
+on:
+  # Weekly, the cadence the `update-personal-dependencies` task in
+  # simons-assistant ran this script at. Monday morning, so a week of updates
+  # is waiting at the start of the week.
+  schedule:
+    - cron: "40 5 * * 1"
+  workflow_dispatch: {}
+
+# The branch is pushed and the pull request opened with UPDATES_TOKEN, so the
+# workflow's own token needs nothing beyond reading the repository — pinact is
+# the only thing that uses it, for the GitHub API.
+permissions:
+  contents: read
+
+jobs:
+  update:
+    name: Update dependencies and open a pull request
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # UPDATES_TOKEN, not the default GITHUB_TOKEN: GitHub deliberately
+          # does not trigger workflows on a push made with GITHUB_TOKEN, so CI
+          # would never run on the pull request this opens — and CI running on
+          # it is what checks that the update builds.
+          token: ${{ secrets.UPDATES_TOKEN }}
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # Pinned by major rather than read from the manifest, as in main.yml:
+      # the action parses package.json, and ours is package.json5.
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          # The version currently pinned, which is also the Dart used to
+          # activate fvm below. When the script moves the pin, fvm fetches the
+          # new SDK itself.
+          flutter-version-file: mobile/.fvmrc
+          cache: true
+
+      # fvm is what reads the release list and writes the new pin into .fvmrc.
+      # Activating it through the Dart that flutter-action just set up avoids
+      # installing a second toolchain to get it.
+      - name: Install fvm
+        run: |
+          set -euo pipefail
+          dart pub global activate fvm
+          echo "$HOME/.pub-cache/bin" >> "$GITHUB_PATH"
+
+      # There is no action that only installs pinact — the one its author
+      # ships wants to do the pinning and the committing itself — so the
+      # release binary is fetched directly. The version is pinned and the
+      # download checked against the checksums file published with the
+      # release, for the same reason the actions here are pinned to SHAs.
+      # Bumping PINACT_VERSION is a manual edit; nothing updates it.
+      - name: Install pinact
+        env:
+          PINACT_VERSION: 5.0.0
+        run: |
+          set -euo pipefail
+          case "$(uname -s)-$(uname -m)" in
+              Linux-x86_64) asset="pinact_linux_amd64.tar.gz" ;;
+              Darwin-arm64) asset="pinact_darwin_arm64.tar.gz" ;;
+              *) echo "no pinact build for $(uname -s)-$(uname -m)" >&2; exit 1 ;;
+          esac
+          checksums="pinact_${PINACT_VERSION}_checksums.txt"
+          base="https://github.com/suzuki-shunsuke/pinact/releases/download/v${PINACT_VERSION}"
+          # In a temporary directory, not the checkout: anything left lying
+          # around in the working tree would be swept into the commit below.
+          cd "$(mktemp -d)"
+          curl -fsSL -O "$base/$asset" -O "$base/$checksums"
+          shasum -a 256 --ignore-missing -c "$checksums"
+          tar xzf "$asset" pinact
+          mkdir -p "$RUNNER_TEMP/bin"
+          install -m 0755 pinact "$RUNNER_TEMP/bin/pinact"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Run ci/update-dependencies
+        env:
+          # The script lends pinact a token when it finds one in the
+          # environment and otherwise falls back to `gh auth token`, which is
+          # not set up here. Unauthenticated, pinact gets 60 GitHub API calls
+          # an hour, which a single run can get through.
+          PINACT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./ci/update-dependencies
+
+      - name: Did anything move?
+        id: changed
+        run: |
+          set -euo pipefail
+          if [[ -n "$(git status --porcelain)" ]]; then
+              echo "any=true" >> "$GITHUB_OUTPUT"
+          else
+              echo "any=false" >> "$GITHUB_OUTPUT"
+              echo "Nothing moved this week."
+          fi
+
+      - name: Open a pull request
+        if: steps.changed.outputs.any == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.UPDATES_TOKEN }}
+        run: |
+          set -euo pipefail
+          today="$(date -u +%F)"
+          branch="updates-$today"
+          # The commit is the bot's; the push is the token's. Which identity
+          # pushes is what decides whether CI runs, and that has to be the PAT.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add -A
+          git commit -m "Update dependencies, $today"
+          # --force so a second run on the same day replaces the branch rather
+          # than failing. Nothing but this workflow writes to it.
+          git push --force origin "$branch"
+          if [[ "$(gh pr list --head "$branch" --state open --json number --jq 'length')" != "0" ]]; then
+              echo "A pull request for $branch is already open; pushed to it."
+              exit 0
+          fi
+          {
+              echo "Weekly dependency update, from \`.github/workflows/update-dependencies.yml\`."
+              echo
+              echo "CI on this pull request is what says whether it builds."
+              echo
+              echo '```'
+              git --no-pager diff --stat 'HEAD^'
+              echo '```'
+          } >"$RUNNER_TEMP/pr-body.md"
+          # Assigned rather than review-requested: the pull request is opened
+          # with my own token, so I am its author, and GitHub will not let an
+          # author request their own review.
+          gh pr create \
+              --title "Update dependencies, $today" \
+              --body-file "$RUNNER_TEMP/pr-body.md" \
+              --assignee skagedal

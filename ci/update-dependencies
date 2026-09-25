@@ -2,9 +2,9 @@
 #
 # Update every dependency in the repo.
 #
-#   ./update                 # all of it
-#   ./update cargo mobile    # only those parts
-#   ./update --dry-run       # print the commands, run none of them
+#   ./ci/update-dependencies                 # all of it
+#   ./ci/update-dependencies cargo mobile    # only those parts
+#   ./ci/update-dependencies --dry-run       # print the commands, run none of them
 #
 # No manifest is written here. Cargo.toml and mobile/pubspec.yaml carry
 # ranges a human put there, so their lock files move underneath them and
@@ -21,7 +21,7 @@
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ALL_PARTS=(cargo web flutter mobile actions)
 
 DRY_RUN=false
@@ -38,7 +38,7 @@ main() {
 
 usage() {
     cat <<'USAGE'
-usage: ./update [options] [part ...]
+usage: ./ci/update-dependencies [options] [part ...]
 
 Parts (default: all, in this order):
   cargo     Cargo.lock, within the ranges in Cargo.toml

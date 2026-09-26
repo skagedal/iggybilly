@@ -1,0 +1,252 @@
+#!/usr/bin/env bash
+#
+# Open the age-encrypted archive that local/seal-signing-backup writes,
+# and put the signing material back where the build scripts look for it.
+#
+#   ./local/open-signing-backup --list            what is in it, and when it was sealed
+#   ./local/open-signing-backup --into ~/check    unpack it somewhere harmless
+#   ./local/open-signing-backup                   restore to ~/.android-keystores and
+#                                                 ~/.apple-signing, if they are not there
+#   ./local/open-signing-backup --force           restore over what is there
+#   ./local/open-signing-backup --dry-run         say what it would do, do none of it
+#
+# This is the dangerous direction. Restoring an old archive over a laptop
+# that already has the current material would replace an app's identity
+# with a former one, so an existing directory is never written over
+# without --force -- and even then the old one is moved aside with a
+# timestamp rather than deleted, the way make-ios-signing moves aside a
+# certificate it replaces.
+#
+# --into is the safe way to answer "is the backup any good": it unpacks
+# into a directory of your choosing and touches nothing else.
+#
+# Opening it needs an age identity that is one of the recipients it was
+# sealed to:
+#
+#   ~/.config/age/identity.txt   this machine's, by default
+#   --identity FILE              the one kept off this machine, on the day
+#                                this machine is the thing that is gone
+#
+# On a new machine, that second key is the whole restore: get it here
+# first, by whatever means it is kept, and point --identity at it. It is
+# the one thing this script cannot do for you.
+#
+# Plaintext is unpacked into a temporary directory beside the destination
+# and moved into place, and that directory goes away again whether this
+# succeeds or fails.
+#
+# Paths can be overridden, which is also how this is tested:
+#
+#   SIGNING_BACKUP_DIR         where the archive is
+#                              (default ~/code/dotfiles/secrets)
+#   SIGNING_ANDROID_DIR        (default ~/.android-keystores)
+#   SIGNING_APPLE_DIR          (default ~/.apple-signing)
+#   SIGNING_IDENTITY_FILE      (default ~/.config/age/identity.txt)
+#
+# Restoring the files is not the whole job: the GitHub secrets are a
+# second copy that this does not touch. See the end of a successful run.
+
+set -euo pipefail
+
+backup_dir="${SIGNING_BACKUP_DIR:-$HOME/code/dotfiles/secrets}"
+android_dir="${SIGNING_ANDROID_DIR:-$HOME/.android-keystores}"
+apple_dir="${SIGNING_APPLE_DIR:-$HOME/.apple-signing}"
+identity_file="${SIGNING_IDENTITY_FILE:-$HOME/.config/age/identity.txt}"
+
+archive="$backup_dir/mobile-signing.tar.gz.age"
+sidecar="$backup_dir/mobile-signing.json"
+
+dry_run=false
+force=false
+list=false
+into=""
+
+die() {
+    echo "open-signing-backup: $*" >&2
+    exit 1
+}
+
+say() {
+    echo "open-signing-backup: $*" >&2
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h | --help)
+            awk 'NR > 2 && /^#/ { sub(/^# ?/, ""); print; next } NR > 2 { exit }' "$0"
+            exit 0
+            ;;
+        -n | --dry-run) dry_run=true ;;
+        -f | --force) force=true ;;
+        -l | --list) list=true ;;
+        --into)
+            shift
+            [ $# -gt 0 ] || die "--into takes a directory"
+            into="$1"
+            ;;
+        -i | --identity)
+            shift
+            [ $# -gt 0 ] || die "--identity takes a file"
+            identity_file="$1"
+            ;;
+        *) die "unknown option: $1 (see --help)" ;;
+    esac
+    shift
+done
+
+command -v age > /dev/null 2>&1 ||
+    die "age not found on PATH. On macOS, \`brew install age\`; see https://age-encryption.org."
+command -v tar > /dev/null 2>&1 || die "tar not found on PATH."
+
+[ -f "$archive" ] ||
+    die "no archive at $archive.
+If the dotfiles repository is not checked out on this machine yet:
+  git clone git@github.com:skagedal/dotfiles.git ~/code/dotfiles
+Otherwise point SIGNING_BACKUP_DIR at wherever it is."
+
+## What the archive says about itself
+
+# The manifest is plaintext next to the archive, so this much can be read
+# without a key at all -- including on the machine that has lost its own.
+if [ -f "$sidecar" ] && command -v jq > /dev/null 2>&1; then
+    jq -r '"open-signing-backup: sealed \(.sealed_at) on \(.sealed_on), \(.files | length) files, \(.recipients) recipients"' \
+        "$sidecar" >&2
+    if [ "$list" = true ] || [ "$dry_run" = true ]; then
+        jq -r '.files[] | "    \(.path)  (\(.bytes) bytes)"' "$sidecar" >&2
+    fi
+fi
+
+if [ "$list" = true ]; then
+    [ -f "$identity_file" ] ||
+        die "no identity at $identity_file, so the archive itself cannot be listed.
+What the manifest says is above; pass --identity to read the archive."
+    say "and what the archive actually holds:"
+    age --decrypt --identity "$identity_file" "$archive" | tar -tzvf - ||
+        die "could not open $archive with $identity_file."
+    exit 0
+fi
+
+## Where it goes
+
+if [ -n "$into" ]; then
+    android_destination="$into/android-keystores"
+    apple_destination="$into/apple-signing"
+else
+    android_destination="$android_dir"
+    apple_destination="$apple_dir"
+fi
+
+# Checked before anything is decrypted, so a run that is going to be
+# refused is refused while nothing has been written.
+occupied=()
+for destination in "$android_destination" "$apple_destination"; do
+    if [ -d "$destination" ] && [ -n "$(ls -A "$destination" 2> /dev/null)" ]; then
+        occupied+=("$destination")
+    fi
+done
+
+if [ ${#occupied[@]} -gt 0 ] && [ "$force" = false ]; then
+    die "there is already signing material here:
+
+$(printf '  %s\n' "${occupied[@]}")
+Restoring over it would replace the key an app is known by with an older
+one. If the archive really is what should win, --force moves what is
+there aside as <directory>.<timestamp> first. To look at the archive
+without touching any of this, use --into."
+fi
+
+if [ "$dry_run" = true ]; then
+    say "would restore to $android_destination and $apple_destination"
+    if [ ${#occupied[@]} -gt 0 ]; then
+        say "would move aside: ${occupied[*]}"
+    fi
+    if [ -f "$identity_file" ]; then
+        say "would open $archive with $identity_file"
+    else
+        say "would open $archive, but there is no identity at $identity_file"
+    fi
+    exit 0
+fi
+
+[ -f "$identity_file" ] ||
+    die "no identity at $identity_file.
+It has to be one of the keys the archive was sealed to. On a machine that
+has none yet, bring the key kept off the old machine here and pass
+--identity. There is no way around this: an archive nobody holds a key
+for is the same as no archive."
+
+## Unpacking
+
+# Beside the destination rather than in $TMPDIR: the move into place is
+# then a rename on the same filesystem, and the plaintext never travels
+# further than it has to. Removed on the way out, failure included.
+mkdir -p "$(dirname "$android_destination")"
+work="$(mktemp -d "$(dirname "$android_destination")/.signing-restore.XXXXXX")"
+chmod 700 "$work"
+trap 'rm -rf "$work"' EXIT
+
+say "opening $archive"
+age --decrypt --identity "$identity_file" "$archive" | tar -xzf - -C "$work" ||
+    die "could not open $archive with $identity_file. Nothing has been changed."
+
+stamp="$(date +%Y%m%d%H%M%S)"
+restored=()
+for entry in android-keystores apple-signing; do
+    [ -d "$work/$entry" ] || continue
+
+    case "$entry" in
+        android-keystores) destination="$android_destination" ;;
+        apple-signing) destination="$apple_destination" ;;
+    esac
+
+    if [ -d "$destination" ]; then
+        if [ -n "$(ls -A "$destination" 2> /dev/null)" ]; then
+            mv "$destination" "$destination.$stamp"
+            say "moved the old $destination to $destination.$stamp"
+        else
+            rmdir "$destination"
+        fi
+    fi
+
+    mkdir -p "$(dirname "$destination")"
+    mv "$work/$entry" "$destination"
+    chmod 700 "$destination"
+    find "$destination" -type d -exec chmod 700 {} +
+    find "$destination" -type f -exec chmod 600 {} +
+    restored+=("$destination")
+done
+
+[ ${#restored[@]} -gt 0 ] || die "the archive held neither directory. Nothing has been changed."
+
+say "restored ${restored[*]}"
+
+if [ -n "$into" ]; then
+    cat >&2 <<MESSAGE
+
+open-signing-backup: done, into $into. Nothing outside it was touched.
+Delete it when you have seen what you came to see -- it is the same
+plaintext the archive exists to protect.
+MESSAGE
+    exit 0
+fi
+
+cat >&2 <<MESSAGE
+
+open-signing-backup: done.
+
+The files are back. The other copy of all this is the repository's
+secrets, which this does not touch, so on a machine that is replacing a
+lost one there are two things left:
+
+1. Android: reads the keystore path out of mobile/android/key.properties,
+   which is gitignored and not in the archive. Write it again from the
+   restored keystore, or run:
+
+     base64 < "$android_dir/iggybilly-release.jks" | gh secret set ANDROID_KEYSTORE_BASE64
+
+2. iOS: run ./local/make-ios-signing. It reuses the restored certificate
+   for as long as it is good for, makes a fresh profile, and sets all
+   seven secrets from what is now on disk.
+
+See "Releasing" in mobile/README.md for what each secret is.
+MESSAGE

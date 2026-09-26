@@ -18,8 +18,9 @@
 # practice a yearly run renews both.
 #
 # Everything it makes is kept in ~/.apple-signing, outside the repository.
-# Back that directory up: the private key in it exists nowhere else, and
-# without it the certificate is a dead letter.
+# Seal that directory with ./local/seal-signing-backup afterwards: the
+# private key in it exists nowhere else, and without it the certificate is
+# a dead letter.
 #
 # Two things it cannot do, because App Store Connect has no API for
 # either: create the API key it authenticates with, and create the app
@@ -249,7 +250,12 @@ make-ios-signing: done. All seven iOS secrets are set.
   bundle        $bundle
   profile       $profile
 
-Back up $output_dir. The private key in it exists nowhere else.
+Now seal it, which is one command:
+
+  ./local/seal-signing-backup --push
+
+The private key in $output_dir exists nowhere else, and that puts it in
+an age-encrypted archive in the private dotfiles repository as well.
 
 Two things left, both web-only and both once:
 

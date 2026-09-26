@@ -284,3 +284,10 @@ whatever channel you'd send a password.
   that tag's GitHub release and sends the iOS build to TestFlight. It has secrets
   and one-time setup of its own — see "Releasing" in
   [`mobile/README.md`](mobile/README.md).
+- What signs those apps is not in this repository and cannot be made
+  again: the Android keystore is the app's identity to every phone that
+  has it, and the iOS distribution private key exists in one place.
+  `./local/seal-signing-backup` seals both into an `age`-encrypted
+  archive in a private repository, and `./local/open-signing-backup` is
+  the other direction. See "Keeping the signing material" in
+  [`mobile/README.md`](mobile/README.md).

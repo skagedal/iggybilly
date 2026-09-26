@@ -1,0 +1,350 @@
+#!/usr/bin/env bash
+#
+# Seal the signing material into an age-encrypted archive in the private
+# dotfiles repository, so that it exists somewhere other than this laptop.
+#
+#   ./local/seal-signing-backup              seal it, if anything has changed
+#   ./local/seal-signing-backup --commit     and commit it in the dotfiles repo
+#   ./local/seal-signing-backup --push       and push that commit
+#   ./local/seal-signing-backup --dry-run    say what it would do, do none of it
+#
+# What goes in is ~/.android-keystores and ~/.apple-signing, whole: the
+# keystore Android knows the app by, the iOS distribution private key,
+# its certificate and the .p12 they are bundled into, the provisioning
+# profile, and the App Store Connect .p8 that lives in the same directory
+# -- see "The API key" below. Either directory may be missing; a machine
+# that has only done the Android half seals only that.
+#
+# It is encrypted to every recipient in the recipients file, and there
+# must be at least two of them: the identity on this machine, and one
+# kept off it. Encrypting only to this machine would mean losing the
+# laptop also loses the key that opens the backup of the laptop. The
+# script refuses to run with one, which is the whole point of it.
+#
+#   secrets/recipients.txt   in the dotfiles repo; public keys, so the
+#                            file itself is not a secret
+#
+# If there is no such file yet, see local/signing-backup.recipients.example
+# for what it looks like and where the second key can live. Making an age
+# key is one command, but which second key to trust is a decision, so this
+# script never makes one for you.
+#
+# The API key
+#
+# ~/.apple-signing also holds the App Store Connect .p8, which carries the
+# Admin role: account access rather than only signing material. It is here
+# because a restore that leaves you unable to issue a certificate or upload
+# a build is not a restore, and because leaving it out would be an opt-out
+# nobody remembers. Pass --no-api-key to keep it out; unlike the keystore
+# and the distribution key, a lost .p8 can be replaced by revoking it and
+# making another in App Store Connect.
+#
+# Nothing in plaintext is ever written to disk: the archive is piped
+# straight into age, and what lands next to the destination is already
+# ciphertext.
+#
+# Paths can be overridden, which is also how this is tested:
+#
+#   SIGNING_BACKUP_DIR         where the archive goes
+#                              (default ~/code/dotfiles/secrets)
+#   SIGNING_ANDROID_DIR        (default ~/.android-keystores)
+#   SIGNING_APPLE_DIR          (default ~/.apple-signing)
+#   SIGNING_RECIPIENTS_FILE    (default $SIGNING_BACKUP_DIR/recipients.txt)
+#   SIGNING_IDENTITY_FILE      (default ~/.config/age/identity.txt), used
+#                              only to check that the archive opens again
+#
+# Pull the dotfiles repo before sealing. Re-running with nothing changed
+# does nothing, and an archive sealed from newer material than this
+# machine has is refused rather than overwritten.
+
+set -euo pipefail
+
+backup_dir="${SIGNING_BACKUP_DIR:-$HOME/code/dotfiles/secrets}"
+android_dir="${SIGNING_ANDROID_DIR:-$HOME/.android-keystores}"
+apple_dir="${SIGNING_APPLE_DIR:-$HOME/.apple-signing}"
+recipients_file="${SIGNING_RECIPIENTS_FILE:-$backup_dir/recipients.txt}"
+identity_file="${SIGNING_IDENTITY_FILE:-$HOME/.config/age/identity.txt}"
+
+archive="$backup_dir/mobile-signing.tar.gz.age"
+sidecar="$backup_dir/mobile-signing.json"
+
+dry_run=false
+force=false
+api_key=true
+commit=false
+push=false
+
+die() {
+    echo "seal-signing-backup: $*" >&2
+    exit 1
+}
+
+say() {
+    echo "seal-signing-backup: $*" >&2
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h | --help)
+            awk 'NR > 2 && /^#/ { sub(/^# ?/, ""); print; next } NR > 2 { exit }' "$0"
+            exit 0
+            ;;
+        -n | --dry-run) dry_run=true ;;
+        -f | --force) force=true ;;
+        --no-api-key) api_key=false ;;
+        --commit) commit=true ;;
+        --push) commit=true; push=true ;;
+        *) die "unknown option: $1 (see --help)" ;;
+    esac
+    shift
+done
+
+command -v age > /dev/null 2>&1 ||
+    die "age not found on PATH. On macOS, \`brew install age\`; see https://age-encryption.org."
+for tool in tar jq shasum; do
+    command -v "$tool" > /dev/null 2>&1 || die "$tool not found on PATH."
+done
+
+## What there is to seal
+
+sources=()
+if [ -d "$android_dir" ]; then
+    # Absolute, because the staging symlinks below are made elsewhere.
+    sources+=("android-keystores:$(cd "$android_dir" && pwd)")
+else
+    say "no $android_dir, sealing without it"
+fi
+if [ -d "$apple_dir" ]; then
+    sources+=("apple-signing:$(cd "$apple_dir" && pwd)")
+else
+    say "no $apple_dir, sealing without it"
+fi
+
+[ ${#sources[@]} -gt 0 ] ||
+    die "neither $android_dir nor $apple_dir exists, so there is nothing to seal.
+Run ./local/make-release-keystore or ./local/make-ios-signing first."
+
+# A keystore is no use without the password that opens it, and for a
+# keystore made before make-release-keystore started writing one beside
+# it, the only copy is in the repository's mobile/android/key.properties
+# -- which is gitignored, and not in here.
+if [ -d "$android_dir" ]; then
+    for keystore in "$android_dir"/*.jks; do
+        if [ -e "$keystore" ] && [ ! -e "$keystore.password" ]; then
+            say "warning: nothing at $keystore.password, so this archive would
+hold a keystore nobody can open. Write it there from key.properties:
+  sed -n 's/^storePassword=//p' mobile/android/key.properties > $keystore.password"
+        fi
+    done
+fi
+
+## Who can open it
+
+[ -f "$recipients_file" ] ||
+    die "no recipients file at $recipients_file.
+It lists the age public keys the archive is encrypted to, one per line,
+and there have to be at least two: this machine, and a key kept off it.
+See local/signing-backup.recipients.example."
+
+recipient_count="$(grep -c -v -e '^[[:space:]]*$' -e '^[[:space:]]*#' "$recipients_file" || true)"
+[ "$recipient_count" -ge 2 ] ||
+    die "$recipients_file names fewer than two recipients ($recipient_count).
+A backup of this laptop that only the key on this laptop can open goes
+with the laptop. Add a second key kept somewhere else -- see
+local/signing-backup.recipients.example -- and run this again."
+
+## Staging
+
+# Symlinks rather than copies, so no plaintext is duplicated anywhere:
+# tar -h follows them, and the archive gets the names below rather than
+# whatever the source directories happen to be called.
+work="$(mktemp -d)"
+chmod 700 "$work"
+trap 'rm -rf "$work"' EXIT
+
+stage="$work/stage"
+mkdir -p "$stage"
+entries=()
+for source in "${sources[@]}"; do
+    name="${source%%:*}"
+    path="${source#*:}"
+    ln -s "$path" "$stage/$name"
+    entries+=("$name")
+done
+
+# find -L walks through those symlinks. Every caller runs from the
+# staging directory and the paths stay relative to it, so neither the
+# digest below nor the manifest depends on where any of this was made.
+# What this lists is exactly what the archive gets, --no-api-key
+# included, so that the digest below notices that flag changing.
+list_files() {
+    if [ "$api_key" = true ]; then
+        find -L . -type f -print0 | sort -z
+    else
+        find -L . -type f ! -name '*.p8' -print0 | sort -z
+    fi
+}
+
+[ -n "$(cd "$stage" && list_files | tr -d '\0')" ] ||
+    die "the source directories are empty."
+
+# Over names and contents both, so that a rename counts as a change.
+digest="$(cd "$stage" && list_files | xargs -0 shasum -a 256 | shasum -a 256 | cut -d' ' -f1)"
+# Over everything in the source directories rather than over what the
+# archive holds: this says how old the material on this disk is, and
+# --no-api-key should not make it look older than it is.
+newest_epoch="$(cd "$stage" && find -L . -type f -print0 |
+    xargs -0 stat -Lf '%m' | sort -n | tail -n 1)"
+newest="$(date -u -r "$newest_epoch" '+%Y-%m-%dT%H:%M:%SZ')"
+
+## Is this worth writing?
+
+if [ -f "$sidecar" ] && [ -f "$archive" ] && [ "$force" = false ]; then
+    previous_digest="$(jq -r '.digest // empty' "$sidecar")"
+    previous_newest="$(jq -r '.source_newest // empty' "$sidecar")"
+
+    if [ "$previous_digest" = "$digest" ]; then
+        say "the archive already holds exactly this material; nothing to do"
+        exit 0
+    fi
+
+    # Both timestamps are UTC in one fixed format, so > compares them.
+    if [ -n "$previous_newest" ] && [[ "$previous_newest" > "$newest" ]]; then
+        die "the archive was sealed from material newer than what is here.
+
+  sealed from    $previous_newest
+  on this disk   $newest
+
+That is the shape of a restore about to be undone, so it stops here.
+Check what is in $android_dir and $apple_dir -- ./local/open-signing-backup
+--list says what the archive has -- and pass --force if this machine
+really does hold the material that should win."
+    fi
+elif [ -f "$archive" ] && [ "$force" = false ]; then
+    die "$archive is there but $sidecar is not, so there is no telling what
+it holds or when it was written. Move it aside, or pass --force."
+fi
+
+## Sealing
+
+if [ "$api_key" = true ]; then
+    tar_options=(-czhf -)
+else
+    say "leaving the App Store Connect .p8 out"
+    tar_options=(-czhf - --exclude '*.p8')
+fi
+
+if [ "$dry_run" = true ]; then
+    say "would seal ${entries[*]} to $archive"
+    say "would encrypt to $recipient_count recipients from $recipients_file"
+    (cd "$stage" && list_files | tr '\0' '\n' | sed 's|^\./|    |')
+    if [ "$commit" = true ]; then
+        say "would commit it in $backup_dir"
+    fi
+    if [ "$push" = true ]; then
+        say "would push that commit"
+    fi
+    exit 0
+fi
+
+mkdir -p "$backup_dir"
+
+# Written beside the destination and renamed into place, so that a failure
+# anywhere in the pipe leaves the archive that is already there untouched
+# rather than half-overwritten. Ciphertext, on the same filesystem, and
+# removed by the trap if anything below fails.
+temp_archive="$(mktemp "$backup_dir/.mobile-signing.XXXXXX")"
+temp_sidecar="$(mktemp "$backup_dir/.mobile-signing-json.XXXXXX")"
+trap 'rm -rf "$work" "$temp_archive" "$temp_sidecar"' EXIT
+
+say "sealing ${entries[*]} for $recipient_count recipients"
+
+tar "${tar_options[@]}" -C "$stage" "${entries[@]}" |
+    age --recipients-file "$recipients_file" --output "$temp_archive" ||
+    die "could not write the archive. Nothing has been changed."
+
+# An archive nobody here can open is worth finding out about now rather
+# than on the day it is needed. Only this machine's identity can be
+# checked; that the second recipient is good is a thing to test by hand,
+# once, when it is set up.
+if [ -f "$identity_file" ]; then
+    age --decrypt --identity "$identity_file" "$temp_archive" | tar -tzf - > /dev/null ||
+        die "the archive did not open again with $identity_file. Nothing has been changed."
+else
+    say "no identity at $identity_file, so the archive was not opened again to check it"
+fi
+
+files_json="$(
+    cd "$stage"
+    list_files | while IFS= read -r -d '' file; do
+        jq -nc --arg path "${file#./}" --argjson bytes "$(stat -Lf '%z' "$file")" \
+            '{path: $path, bytes: $bytes}'
+    done | jq -sc .
+)"
+
+jq -n \
+    --arg sealed_at "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+    --arg sealed_on "$(hostname -s)" \
+    --arg source_newest "$newest" \
+    --arg digest "$digest" \
+    --argjson recipients "$recipient_count" \
+    --argjson api_key "$api_key" \
+    --argjson files "$files_json" \
+    '{sealed_at: $sealed_at, sealed_on: $sealed_on, source_newest: $source_newest,
+      digest: $digest, recipients: $recipients, app_store_connect_key: $api_key,
+      files: $files}' > "$temp_sidecar"
+
+chmod 644 "$temp_archive" "$temp_sidecar"
+mv "$temp_archive" "$archive"
+mv "$temp_sidecar" "$sidecar"
+trap 'rm -rf "$work"' EXIT
+
+say "sealed $(jq -r '.files | length' "$sidecar") files to $archive"
+
+## Getting it off the machine
+
+if [ "$commit" = true ]; then
+    git -C "$backup_dir" rev-parse --is-inside-work-tree > /dev/null 2>&1 ||
+        die "$backup_dir is not in a git repository, so there is nothing to commit."
+    git -C "$backup_dir" add -- "$archive" "$sidecar"
+    if git -C "$backup_dir" diff --cached --quiet -- "$archive" "$sidecar"; then
+        say "nothing staged, so nothing to commit"
+    else
+        git -C "$backup_dir" commit -m "Seal iggybilly signing material" -- "$archive" "$sidecar"
+    fi
+    if [ "$push" = true ]; then
+        git -C "$backup_dir" push
+    fi
+fi
+
+cat >&2 <<MESSAGE
+
+seal-signing-backup: done.
+
+  archive   $archive
+  manifest  $sidecar
+
+MESSAGE
+
+if [ "$push" = true ]; then
+    cat >&2 <<MESSAGE
+Committed and pushed. It is now somewhere that survives this machine --
+as long as the second recipient's key does not live on it too.
+MESSAGE
+elif [ "$commit" = true ]; then
+    cat >&2 <<MESSAGE
+Committed, and still only on this machine until:
+
+  git -C "$backup_dir" push
+MESSAGE
+else
+    cat >&2 <<MESSAGE
+Still only on this machine. What gets it off:
+
+  git -C "$backup_dir" add mobile-signing.tar.gz.age mobile-signing.json
+  git -C "$backup_dir" commit -m "Seal iggybilly signing material"
+  git -C "$backup_dir" push
+
+Or run this again with --push, which does the three.
+MESSAGE
+fi

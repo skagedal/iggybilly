@@ -205,6 +205,36 @@ pkgs-index-ready() {
     git pkgs init --no-hooks -q && git pkgs upgrade -q
 }
 
+# With simons-misc-helpers on PATH (from skagedal-tools), the diff goes
+# through its formatter, which picks out major version bumps. With
+# DEPENDENCY_CHANGES_FILE set, the formatted diff also goes to that file,
+# uncoloured, for the workflow to put in the pull request.
+#
+# Only lockfiles and action pins are kept. Nothing else moves here, and
+# git-pkgs reports a package listed twice in one manifest, as a dependency
+# and a dev-dependency, as added on every run.
+package-diff() {
+    if ! command -v simons-misc-helpers >/dev/null 2>&1; then
+        git pkgs diff
+        return
+    fi
+    local diff_json
+    diff_json="$(git pkgs diff --format=json)" || return
+    # "No dependency changes." is plain text even with --format=json.
+    if [[ "$diff_json" != "{"* ]]; then
+        printf '%s\n' "$diff_json"
+        return 0
+    fi
+    diff_json="$(printf '%s\n' "$diff_json" | jq 'map_values(map(select(
+        .manifest_kind == "lockfile" or .ecosystem == "github-actions")))')"
+    printf '%s\n' "$diff_json" | simons-misc-helpers format-dependency-changes
+    if [[ -n "${DEPENDENCY_CHANGES_FILE:-}" ]]; then
+        printf '%s\n' "$diff_json" |
+            simons-misc-helpers format-dependency-changes --color never \
+                >"$DEPENDENCY_CHANGES_FILE"
+    fi
+}
+
 report() {
     heading "What changed"
     ( cd "$ROOT" && git --no-pager diff --stat -- \
@@ -218,7 +248,7 @@ report() {
         (
             cd "$ROOT"
             if pkgs-index-ready; then
-                git pkgs diff || warn "git pkgs diff failed"
+                package-diff || warn "git pkgs diff failed"
             else
                 warn "could not prepare .git/pkgs.sqlite3, skipping the diff"
             fi

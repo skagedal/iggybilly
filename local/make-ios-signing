@@ -326,7 +326,7 @@ make-ios-signing: done. All seven iOS secrets are set.
 
 Now seal it, which is one command:
 
-  ./local/seal-signing-backup --push
+  ./local/seal-signing-backup
 
 The private key in $output_dir exists nowhere else, and that puts it in
 an age-encrypted archive in the private dotfiles repository as well.

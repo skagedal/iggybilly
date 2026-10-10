@@ -228,60 +228,31 @@ rather than deleted.
 
 ### Keeping the signing material
 
-Both scripts above end by telling you to back something up, and an
-instruction is not a backup. `../local/seal-signing-backup` is:
+    ../local/seal-signing-backup
 
-    ../local/seal-signing-backup --push
+tars `~/.android-keystores` and `~/.apple-signing` straight into
+[age][age] and writes `secrets/mobile-signing.tar.gz.age` in the private
+[dotfiles](https://github.com/skagedal/dotfiles) repository; commit and
+push it from there. Run it again whenever the material changes. The App
+Store Connect `.p8` goes in too.
 
-It tars `~/.android-keystores` and `~/.apple-signing`, encrypts the
-stream with [age][age], and writes the result into the private
-[dotfiles](https://github.com/skagedal/dotfiles) repository as
-`secrets/mobile-signing.tar.gz.age`, with a plaintext
-`secrets/mobile-signing.json` beside it saying when it was sealed and
-what is in it. No plaintext is ever written to disk: `tar` is piped
-straight into `age`. Re-running with nothing changed does nothing, and an
-archive sealed from material newer than this machine's is refused rather
-than overwritten.
+It refuses to run unless `secrets/recipients.txt` lists at least two age
+keys: this machine's, and one kept off it. Otherwise losing the laptop
+also loses the key that opens the backup. See
+[`../local/signing-backup.recipients.example`](../local/signing-backup.recipients.example).
 
-It is encrypted to **two** recipients, listed in
-`secrets/recipients.txt`, and refuses to run with one. The first is this
-machine's age identity, the second is a key kept off it — otherwise
-losing the laptop also loses the key that opens the backup of the laptop.
-See [`../local/signing-backup.recipients.example`](../local/signing-backup.recipients.example)
-for what that file looks like and what the second key can be. Making an
-age key is one command; deciding which second key to trust is not, so the
-script never makes one for you.
+Going the other way:
 
-The App Store Connect `.p8` is in there too, because it lives in
-`~/.apple-signing` and because a restore that leaves you unable to issue
-a certificate is not a restore. It carries the Admin role, so that is a
-deliberate widening of what the age identity is worth; `--no-api-key`
-leaves it out, and unlike the other two, a lost `.p8` can be replaced by
-revoking it and making another.
+    ../local/open-signing-backup ~/check   unpack somewhere harmless, to check it
+    ../local/open-signing-backup           restore into ~
 
-Going the other way is `../local/open-signing-backup`:
-
-    ../local/open-signing-backup --list          what is in it
-    ../local/open-signing-backup --into ~/check  unpack it somewhere harmless
-    ../local/open-signing-backup                 restore to the real paths
-
-Restoring is the dangerous direction — an old archive over a working
-laptop replaces an app's identity with a former one — so it refuses to
-write over an existing `~/.android-keystores` or `~/.apple-signing`
-without `--force`, and even then moves the old one aside with a timestamp.
-`--into` is the safe way to check the backup is any good, and `--list`
-needs no more than the identity.
-
-On a machine replacing a lost one, the age identity is the first thing to
-bring over and the one thing no script can do for you; `--identity FILE`
-points at it. The restored files are only half of it, since CI holds its
-own copies as repository secrets: `make-ios-signing` sets the seven iOS
-ones again from what was restored, and the two Android ones are the
+It refuses to write over an existing `~/.android-keystores` or
+`~/.apple-signing`, since an old archive over current material would
+replace an app's identity with a former one. `IDENTITY=FILE` picks the age
+key, which on a replacement machine is the one you kept off the old one.
+CI keeps its own copies as repository secrets: `make-ios-signing` sets the
+iOS ones again from the restored files, and the Android ones are the
 commands `make-release-keystore` prints.
-
-Neither script goes near the repository secrets otherwise, and neither is
-a substitute for them. CI needs plaintext at build time; this is only
-about not losing the material.
 
 [age]: https://age-encryption.org
 

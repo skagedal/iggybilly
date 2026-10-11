@@ -192,12 +192,12 @@ Once, on your machine:
 
     ../local/make-release-keystore
 
-It writes a keystore outside the repository and a gitignored
-`android/key.properties` pointing at it, and prints the two commands that
-give CI the same key. Back the keystore up before anything else. Android
-knows an app by its signature, so if that file is lost, every friend who
-has the app has to delete it before they can install another build — and
-the copy in `key.properties` is the only other one.
+It writes a keystore to `~/.app-signing/android`, its password beside it,
+and a gitignored `android/key.properties` pointing at both, and prints the
+two commands that give CI the same key. Back the keystore up before
+anything else — see below. Android knows an app by its signature, so if
+that file is lost, every friend who has the app has to delete it before
+they can install another build.
 
 Nothing else needs an account: there is no Play Console in this, and no
 fee. Your friends allow installs from their browser once, tap the APK on
@@ -231,9 +231,11 @@ a `.p12`, registers the bundle id if it is new, makes the App Store
 provisioning profile, and sets all seven iOS secrets. No Xcode, no
 Keychain Access, no developer portal.
 
-Back up `~/.apple-signing` afterwards, the way you backed up the
-keystore. The private key is in there and nowhere else, and a certificate
-whose private key is gone is a dead letter.
+Everything it makes goes in `~/.app-signing/apple`. The distribution
+certificate is the Apple team's rather than the app's, so other apps'
+`make-ios-signing` reuse the same files. Back it up afterwards; the
+private key is in there and nowhere else, and a certificate whose private
+key is gone is a dead letter.
 
 Then turn the job on:
 
@@ -251,6 +253,27 @@ nearly out. That last part matters because an account is allowed very few
 live distribution certificates, and asking for another while the one you
 have still works is how you run out. Superseded material is moved aside
 rather than deleted.
+
+### Keeping the signing material
+
+Everything that signs the apps lives in one directory, outside every
+repository:
+
+    ~/.app-signing/
+      README.md
+      android/<app>-release.jks            one keystore per app
+      android/<app>-release.jks.password
+      apple/distribution.*                 the team's certificate, key and .p12
+      apple/<app>-appstore.mobileprovision one profile per app
+      apple/AuthKey_<id>.p8                the App Store Connect API key
+
+Only the profiles can be made again for free. The keystores and the
+distribution key exist nowhere else, so back the directory up somewhere
+that survives this machine, encrypted; its README says how.
+
+CI holds its own copies as repository secrets. On a new machine, restore
+`~/.app-signing`, run `make-ios-signing` to set the iOS ones again, and
+recreate `android/key.properties`, which is not in it.
 
 ### What ends up in the repository's secrets
 

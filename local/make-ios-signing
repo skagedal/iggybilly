@@ -17,9 +17,10 @@
 # is how you run out. Both expire a year after they are issued, so in
 # practice a yearly run renews both.
 #
-# Everything it makes is kept in ~/.apple-signing, outside the repository.
-# Back that directory up: the private key in it exists nowhere else, and
-# without it the certificate is a dead letter.
+# Everything it makes is kept in ~/.app-signing/apple, outside the
+# repository and shared with the other apps on the team. Back it up: the
+# private key in it exists nowhere else, and without it the certificate is
+# a dead letter. ~/.app-signing/README.md says how.
 #
 # Two things it cannot do, because App Store Connect has no API for
 # either: create the API key it authenticates with, and create the app
@@ -33,7 +34,7 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 bundle_id="tech.skagedal.iggybilly"
 profile_name="iggybilly App Store"
-output_dir="$HOME/.apple-signing"
+output_dir="$HOME/.app-signing/apple"
 
 die() {
     echo "make-ios-signing: $*" >&2
@@ -78,11 +79,14 @@ API key you made under Users and Access, Integrations."
 key_file="${APP_STORE_CONNECT_KEY_FILE/#\~/$HOME}"
 [ -f "$key_file" ] || die "no API key at $key_file."
 
-private_key="$output_dir/iggybilly-distribution.key.pem"
-certificate="$output_dir/iggybilly-distribution.cer.pem"
-bundle="$output_dir/iggybilly-distribution.p12"
-bundle_password_file="$output_dir/iggybilly-distribution.p12.password"
-certificate_id_file="$output_dir/iggybilly-distribution.certificate-id"
+# The certificate is the team's, not the app's: one Apple Distribution
+# certificate signs every app on the account, so its files carry no app
+# name and every app's release script uses the same ones.
+private_key="$output_dir/distribution.key.pem"
+certificate="$output_dir/distribution.cer.pem"
+bundle="$output_dir/distribution.p12"
+bundle_password_file="$output_dir/distribution.p12.password"
+certificate_id_file="$output_dir/distribution.certificate-id"
 profile="$output_dir/iggybilly-appstore.mobileprovision"
 
 # Renew rather than reuse once the certificate has this little left. A
@@ -249,7 +253,8 @@ make-ios-signing: done. All seven iOS secrets are set.
   bundle        $bundle
   profile       $profile
 
-Back up $output_dir. The private key in it exists nowhere else.
+Back up ~/.app-signing now, as its README.md says. The private key in
+$output_dir exists nowhere else.
 
 Two things left, both web-only and both once:
 

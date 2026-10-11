@@ -166,12 +166,12 @@ Once, on your machine:
 
     ../local/make-release-keystore
 
-It writes a keystore outside the repository, its password beside it, and
-a gitignored `android/key.properties` pointing at both, and prints the
-two commands that give CI the same key. Seal the keystore before anything
-else — `../local/seal-signing-backup`, below. Android knows an app by its
-signature, so if that file is lost, every friend who has the app has to
-delete it before they can install another build.
+It writes a keystore to `~/.app-signing/android`, its password beside it,
+and a gitignored `android/key.properties` pointing at both, and prints the
+two commands that give CI the same key. Back the keystore up before
+anything else — see below. Android knows an app by its signature, so if
+that file is lost, every friend who has the app has to delete it before
+they can install another build.
 
 Nothing else needs an account: there is no Play Console in this, and no
 fee. Your friends allow installs from their browser once, tap the APK on
@@ -205,9 +205,11 @@ a `.p12`, registers the bundle id if it is new, makes the App Store
 provisioning profile, and sets all seven iOS secrets. No Xcode, no
 Keychain Access, no developer portal.
 
-Seal `~/.apple-signing` afterwards, the way you sealed the keystore — the
-next section. The private key is in there and nowhere else, and a
-certificate whose private key is gone is a dead letter.
+Everything it makes goes in `~/.app-signing/apple`. The distribution
+certificate is the Apple team's rather than the app's, so other apps'
+`make-ios-signing` reuse the same files. Back it up afterwards; the
+private key is in there and nowhere else, and a certificate whose private
+key is gone is a dead letter.
 
 Then turn the job on:
 
@@ -228,33 +230,24 @@ rather than deleted.
 
 ### Keeping the signing material
 
-    ../local/seal-signing-backup
+Everything that signs the apps lives in one directory, outside every
+repository:
 
-tars `~/.android-keystores` and `~/.apple-signing` straight into
-[age][age] and writes `secrets/mobile-signing.tar.gz.age` in the private
-[dotfiles](https://github.com/skagedal/dotfiles) repository; commit and
-push it from there. Run it again whenever the material changes. The App
-Store Connect `.p8` goes in too.
+    ~/.app-signing/
+      README.md
+      android/<app>-release.jks            one keystore per app
+      android/<app>-release.jks.password
+      apple/distribution.*                 the team's certificate, key and .p12
+      apple/<app>-appstore.mobileprovision one profile per app
+      apple/AuthKey_<id>.p8                the App Store Connect API key
 
-It refuses to run unless `secrets/recipients.txt` lists at least two age
-keys: this machine's, and one kept off it. Otherwise losing the laptop
-also loses the key that opens the backup. See
-[`../local/signing-backup.recipients.example`](../local/signing-backup.recipients.example).
+Only the profiles can be made again for free. The keystores and the
+distribution key exist nowhere else, so back the directory up somewhere
+that survives this machine, encrypted; its README says how.
 
-Going the other way:
-
-    ../local/open-signing-backup ~/check   unpack somewhere harmless, to check it
-    ../local/open-signing-backup           restore into ~
-
-It refuses to write over an existing `~/.android-keystores` or
-`~/.apple-signing`, since an old archive over current material would
-replace an app's identity with a former one. `IDENTITY=FILE` picks the age
-key, which on a replacement machine is the one you kept off the old one.
-CI keeps its own copies as repository secrets: `make-ios-signing` sets the
-iOS ones again from the restored files, and the Android ones are the
-commands `make-release-keystore` prints.
-
-[age]: https://age-encryption.org
+CI holds its own copies as repository secrets. On a new machine, restore
+`~/.app-signing`, run `make-ios-signing` to set the iOS ones again, and
+recreate `android/key.properties`, which is not in it.
 
 ### What ends up in the repository's secrets
 

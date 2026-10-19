@@ -20,7 +20,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # A fork of pnpm/action-setup that reads package.json5, until
       # pnpm/action-setup#290 lands upstream.
-      - uses: skagedal/action-pnpm-setup@18f18a578001a9bddec4c6c1583d7ab2f25d7b4d # json5-package-manifest, pnpm/action-setup#290
+      - uses: skagedal/action-pnpm-setup@18f18a578001a9bddec4c6c1583d7ab2f25d7b4d # v6.1.1-json5.1
         with:
           package_json_file: web/package.json5
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0

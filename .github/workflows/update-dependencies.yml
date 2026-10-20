@@ -132,8 +132,6 @@ jobs:
           {
               echo "Weekly dependency update, from \`.github/workflows/update-dependencies.yml\`."
               echo
-              echo "CI on this pull request is what says whether it builds."
-              echo
               changes="$RUNNER_TEMP/dependency-changes.txt"
               if [[ -s "$changes" ]]; then
                   echo '```'

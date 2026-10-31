@@ -17,7 +17,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # A fork of pnpm/action-setup that reads package.json5, until
       # pnpm/action-setup#290 lands upstream.
       - uses: skagedal/action-pnpm-setup@18f18a578001a9bddec4c6c1583d7ab2f25d7b4d # v6.1.1-json5.1

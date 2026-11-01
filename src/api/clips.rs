@@ -30,6 +30,8 @@ pub struct Clip {
     id: i64,
     name: String,
     original_filename: String,
+    /// The type of what `audio_url` serves, which for a clip with a
+    /// playback copy is not the upload's.
     content_type: String,
     /// RFC 3339, as stored. The device formats it — a server that
     /// pre-formatted this would be deciding the phone's time zone for it.
@@ -45,7 +47,9 @@ pub struct Clip {
     duration_seconds: Option<f64>,
     /// Paths, relative to this server's origin. Named rather than left
     /// for the client to build, so the shape of these URLs stays a
-    /// server decision.
+    /// server decision. `audio_url` names the file it streams in `v`,
+    /// which the route ignores, so a cache keyed on it notices when a
+    /// clip gains a playback copy.
     audio_url: String,
     download_url: String,
     /// Whether the caller may delete this clip: only its uploader may.
@@ -55,13 +59,17 @@ pub struct Clip {
 
 pub(super) fn clip(c: queries::clips::Clip, viewer_id: i64) -> Clip {
     Clip {
-        audio_url: format!("/clips/{}/audio", c.id),
+        audio_url: format!(
+            "/clips/{}/audio?v={}",
+            c.id,
+            c.playback_filename.get(..8).unwrap_or(&c.playback_filename)
+        ),
         download_url: format!("/clips/{}/audio?download=1", c.id),
         can_delete: c.uploaded_by == viewer_id,
         id: c.id,
         name: c.name,
         original_filename: c.original_filename,
-        content_type: c.content_type,
+        content_type: c.playback_content_type,
         uploaded_at: c.uploaded_at,
         recording_date: c.recording_date,
         uploader: c.uploader,

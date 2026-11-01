@@ -94,10 +94,8 @@ clips in a format that is now refused stay as they are; there are none
 today, and the server logs any it finds.
 
 On an iPhone whose app has already cached one of those clips, the cached
-copy is the broken one. The app picks up the fixed copy because the
-clip's audio URL changes when the file it plays changes, so the old
-cached copy no longer matches anything and ages out like any other
-unused entry.
+copy is the broken one. It fails on first play, the app drops it and
+streams the fixed copy from the server, and caches that instead.
 
 ## Implementation
 
@@ -135,8 +133,9 @@ matches the bytes.
 When the detected format is ADTS, the server writes a second file next
 to the original: the same AAC frames in an MP4 container, with the
 duration and an index of every frame, so players know the length and
-can seek. It is done in Rust in the server process, without ffmpeg, as
-the waveform decoding already is.
+can seek. The index goes before the audio, so a player has it after
+the first request. It is done in Rust in the server process, without
+ffmpeg, as the waveform decoding already is.
 
 A stream that changes sample rate or channel layout partway can't go
 into one MP4 track. No phone produces that; if one does, the clip is
@@ -159,18 +158,24 @@ Playing a clip streams its playback copy when it has one and the
 original otherwise. Download always serves the original, with its
 original filename.
 
-The audio URL handed to the web and the app identifies the file being
-played, so it changes when a clip gains a playback copy. That is what
+The audio URL handed to the app identifies the file being played, so it
+changes when a clip gains a playback copy. That is what
 makes the app notice that its cached copy is stale. The content type the
 app is told about is that of the file it plays, so its local copy gets
 the `.m4a` name AVPlayer needs.
 
 ### The app
 
-The app's cache is keyed by the audio URL. Entries cached before this
-change no longer match and are fetched again the next time they are
-played. A clip marked "keep downloaded" stays kept and is downloaded
-again under its new URL.
+The app's cache remembers which of a clip's files each copy is. When
+the server's audio URL names a different one, the old copy no longer
+counts, the clip streams, and the next download replaces it. A clip
+marked "keep downloaded" stays kept through that.
+
+Copies cached before the app recorded this are still used: for almost
+every clip the bytes are the same. A cached ADTS copy, the one that
+doesn't play on an iPhone, fails on first play, and the player already
+answers that by forgetting the copy and streaming from the server,
+which now serves the MP4.
 
 ### Clips already on the server
 
@@ -211,6 +216,3 @@ is in a refused format is logged and left alone.
   Android recorder is misnaming files there's nothing for the uploader
   to change, so silence seems right, but a line in the server log helps
   with the next "why won't this play".
-- **Slow start on a slow connection.** The remuxed file may put its
-  index after the audio, which costs players one extra request before
-  they start. If that is noticeable, the remux can put the index first.

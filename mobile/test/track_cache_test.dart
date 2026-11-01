@@ -355,4 +355,52 @@ void main() {
       isTrue,
     );
   });
+
+  group('when the server starts streaming a different file', () {
+    Uri versioned(String v) =>
+        Uri.parse('https://example.test/clips/1/audio?v=$v');
+
+    test('the old copy is a miss and is replaced on the next store',
+        () async {
+      server.bodies['/clips/1/audio'] = audioOf(100);
+      await cache.store(clipFixture(), versioned('aaaa'));
+      expect(cache.fileFor(versioned('aaaa')), isNotNull);
+
+      expect(cache.fileFor(versioned('bbbb')), isNull);
+      expect(cache.hasCopy(versioned('bbbb')), isFalse);
+
+      server.bodies['/clips/1/audio'] = audioOf(200);
+      final file = await cache.store(clipFixture(), versioned('bbbb'));
+      expect(await file!.length(), 200);
+      expect(cache.usedBytes, 200, reason: 'the old file is deleted');
+      expect(cache.fileFor(versioned('bbbb'))!.path, file.path);
+    });
+
+    test('a kept clip stays kept across the change', () async {
+      server.bodies['/clips/1/audio'] = audioOf(100);
+      await cache.store(clipFixture(), versioned('aaaa'), kept: true);
+
+      expect(cache.isKept(versioned('bbbb')), isTrue);
+      await cache.store(clipFixture(), versioned('bbbb'));
+      expect(cache.isKept(versioned('bbbb')), isTrue);
+    });
+
+    test('a copy from before versions were recorded is still used',
+        () async {
+      server.bodies['/clips/1/audio'] = audioOf(100);
+      await cache.store(clipFixture(), urlFor(1));
+
+      expect(cache.fileFor(versioned('aaaa')), isNotNull);
+    });
+
+    test('the version survives a restart', () async {
+      server.bodies['/clips/1/audio'] = audioOf(100);
+      await cache.store(clipFixture(), versioned('aaaa'));
+
+      final reopened = open();
+      await reopened.open();
+      expect(reopened.fileFor(versioned('aaaa')), isNotNull);
+      expect(reopened.fileFor(versioned('bbbb')), isNull);
+    });
+  });
 }

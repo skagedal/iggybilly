@@ -145,7 +145,7 @@ async fn upload_one(srv: &Server, c: &reqwest::Client, filename: &str) {
 async fn upload_many(srv: &Server, c: &reqwest::Client, filenames: &[&str]) {
     let mut form = reqwest::multipart::Form::new();
     for name in filenames {
-        let part = reqwest::multipart::Part::bytes(b"fake-audio-bytes".to_vec())
+        let part = reqwest::multipart::Part::bytes(audio_bytes(name))
             .file_name(name.to_string())
             .mime_str("audio/mpeg")
             .unwrap();
@@ -1153,4 +1153,20 @@ async fn an_intersection_of_labels_stays_reverse_chronological() {
         .map(|clip| clip["id"].as_i64().unwrap())
         .collect();
     assert_eq!(ids, vec![3, 2, 1]);
+}
+
+/// Real audio for an upload named `name`, chosen by its extension: the
+/// server identifies files by content and refuses anything else.
+fn audio_bytes(name: &str) -> Vec<u8> {
+    let fixture = match name.rsplit('.').next() {
+        Some("m4a") => "guitar-clip.m4a",
+        Some("aac") => "audio/clip.aac",
+        _ => "audio/clip.mp3",
+    };
+    std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(fixture),
+    )
+    .unwrap()
 }

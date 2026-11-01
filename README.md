@@ -9,8 +9,13 @@ Android in [`mobile/`](mobile/), talking to the same server.
 
 - Users sign in with username + password (argon2-hashed, session cookies).
 - Each user can change their own password; admin resets are CLI-only.
-- Anyone can upload an audio file (mp3, m4a, anything browsers play),
-  give it a name, and see it in a reverse-chronological list.
+- Anyone can upload an audio file (MP3, M4A, or AAC as some Android
+  recorders produce it), give it a name, and see it in a
+  reverse-chronological list. The server goes by what a file contains,
+  not what it is called, and refuses other formats. AAC without a
+  container plays from an MP4 copy made at upload, which iPhones need;
+  Download still gives back the file as uploaded. See
+  [`specs/drafts/audio-formats.md`](specs/drafts/audio-formats.md).
 - Each user can delete clips they uploaded (from the clip's own page);
   the row, its labels, and the audio file on disk all go with it. You
   can't delete someone else's clip.

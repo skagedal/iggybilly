@@ -314,12 +314,13 @@ pub(crate) async fn remove(
     user: &crate::models::SessionUser,
     id: i64,
 ) -> AppResult<()> {
-    let row: Option<(i64, String)> =
-        sqlx::query_as("SELECT uploaded_by, storage_filename FROM clips WHERE id = ?")
-            .bind(id)
-            .fetch_optional(&state.pool)
-            .await?;
-    let (uploaded_by, storage_filename) = row.ok_or(AppError::NotFound)?;
+    let row: Option<(i64, String, Option<String>)> = sqlx::query_as(
+        "SELECT uploaded_by, storage_filename, playback_filename FROM clips WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let (uploaded_by, storage_filename, playback_filename) = row.ok_or(AppError::NotFound)?;
     if uploaded_by != user.id {
         return Err(AppError::Forbidden);
     }
@@ -336,9 +337,11 @@ pub(crate) async fn remove(
     // Best-effort file removal: if it's already gone (or never had a
     // readable path), log and move on rather than 500 — the clip is
     // already unreachable from the app.
-    let path = state.config.audio_dir.join(&storage_filename);
-    if let Err(e) = tokio::fs::remove_file(&path).await {
-        tracing::warn!(error = ?e, path = %path.display(), "failed to delete audio file for removed clip");
+    for file in std::iter::once(storage_filename).chain(playback_filename) {
+        let path = state.config.audio_dir.join(&file);
+        if let Err(e) = tokio::fs::remove_file(&path).await {
+            tracing::warn!(error = ?e, path = %path.display(), "failed to delete audio file for removed clip");
+        }
     }
 
     Ok(())
@@ -372,12 +375,19 @@ pub async fn audio(
         .await?
         .ok_or(AppError::NotFound)?;
     let queries::clips::AudioFile {
-        storage_filename: storage,
+        storage_filename,
         content_type,
         original_filename,
+        playback,
     } = file_row;
 
-    let path = state.config.audio_dir.join(&storage);
+    // Playing streams the playback copy when there is one; Download is
+    // always the upload, byte for byte.
+    let (served, content_type) = match playback {
+        Some(p) if q.download.is_none() => p,
+        _ => (storage_filename, content_type),
+    };
+    let path = state.config.audio_dir.join(&served);
 
     // Served by ServeFile rather than by hand, because it answers Range
     // requests: 206 with a Content-Range, 416 when unsatisfiable, plus
@@ -399,8 +409,8 @@ pub async fn audio(
     let mut response = response.map(Body::new);
     let headers = response.headers_mut();
 
-    // content_type is what we wrote at upload time — one of our
-    // allow-listed audio MIME types, never the uploader's claim, and never
+    // content_type is what we wrote at upload time, from the format
+    // detected in the bytes — never the uploader's claim, and never
     // ServeFile's guess from the extension. Pair with nosniff so a curious
     // browser doesn't reinterpret it as HTML.
     headers.insert(
@@ -455,23 +465,6 @@ fn percent_encode_filename(name: &str) -> String {
     out
 }
 
-/// Allow-list mapping from file extension to the MIME type we'll serve
-/// the clip with. We never trust the uploader's claimed Content-Type:
-/// otherwise someone could upload a `.html` and get same-origin XSS
-/// against every other authenticated user.
-fn audio_content_type(ext: &str) -> Option<&'static str> {
-    match ext {
-        "mp3" => Some("audio/mpeg"),
-        "m4a" | "mp4" => Some("audio/mp4"),
-        "wav" => Some("audio/wav"),
-        "flac" => Some("audio/flac"),
-        "ogg" | "oga" | "opus" => Some("audio/ogg"),
-        "aac" => Some("audio/aac"),
-        "webm" => Some("audio/webm"),
-        _ => None,
-    }
-}
-
 /// POST /api/clips — the web's upload endpoint. The work is in
 /// `ingest`, which the app's own upload route calls too.
 pub async fn upload(
@@ -515,46 +508,33 @@ pub(crate) async fn ingest(
             _ => continue,
         };
 
-        let ext = Path::new(&original_filename)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        let content_type = audio_content_type(&ext).ok_or_else(|| {
-            AppError::BadRequest(format!(
-                "unsupported audio format: .{ext} (allowed: mp3, m4a, wav, flac, ogg, opus, aac, webm)"
-            ))
-        })?;
-
-        let storage_filename = format!("{}.{}", uuid::Uuid::new_v4(), ext);
-        let path = state.config.audio_dir.join(&storage_filename);
+        let stem = uuid::Uuid::new_v4().to_string();
+        let upload_path = state.config.audio_dir.join(format!("{stem}.upload"));
 
         // Stream field → file with a hard byte cap. axum's
         // DefaultBodyLimit on this route catches the request before we
         // get here for the common case; the in-loop check is defence in
         // depth and lets us return a specific message.
-        let size_bytes = match stream_field_to_file(&mut field, &path).await {
+        let size_bytes = match stream_field_to_file(&mut field, &upload_path).await {
             Ok(n) => n,
             Err(e) => {
                 // Don't leave half-written turds in the audio dir.
-                let _ = tokio::fs::remove_file(&path).await;
+                let _ = tokio::fs::remove_file(&upload_path).await;
                 return Err(e);
             }
         };
 
-        // Metadata extraction and waveform decoding are sync, CPU/IO
-        // bound work on the just-written file; run both off the runtime
-        // thread in one hop.
-        let path_for_probe = path.clone();
-        let (recording_date, waveform) = tokio::task::spawn_blocking(move || {
-            (
-                extract_recording_date(&path_for_probe),
-                crate::audio::compute(&path_for_probe),
-            )
+        // Format detection, the playback copy, metadata and waveform are
+        // sync, CPU/IO bound work on the just-written file; run them off
+        // the runtime thread in one hop.
+        let audio_dir = state.config.audio_dir.clone();
+        let name_for_errors = original_filename.clone();
+        let stored = tokio::task::spawn_blocking(move || {
+            store_upload(&audio_dir, &stem, &upload_path, &name_for_errors)
         })
         .await
-        .unwrap_or((None, None));
-        let (peaks_json, duration_seconds) = match waveform {
+        .map_err(|e| AppError::Other(e.into()))??;
+        let (peaks_json, duration_seconds) = match &stored.waveform {
             Some(w) => (
                 Some(crate::audio::peaks_to_json(&w.peaks)),
                 Some(w.duration_seconds),
@@ -574,12 +554,10 @@ pub(crate) async fn ingest(
         match insert_with_unique_name(
             &state.pool,
             &display_name_stem,
-            &storage_filename,
+            &stored,
             &original_filename,
-            content_type,
             size_bytes as i64,
             user.id,
-            recording_date.as_deref(),
             peaks_json.as_deref(),
             duration_seconds,
         )
@@ -587,7 +565,11 @@ pub(crate) async fn ingest(
         {
             Ok(clip) => uploaded.push(clip),
             Err(e) => {
-                let _ = tokio::fs::remove_file(&path).await;
+                for file in std::iter::once(&stored.storage_filename)
+                    .chain(stored.playback_filename.as_ref())
+                {
+                    let _ = tokio::fs::remove_file(state.config.audio_dir.join(file)).await;
+                }
                 return Err(e);
             }
         }
@@ -613,6 +595,59 @@ struct UploadResponse {
 struct UploadedClip {
     id: i64,
     name: String,
+}
+
+/// An upload on disk under its final name, with what was learned from it.
+struct StoredUpload {
+    format: crate::audio_format::AudioFormat,
+    storage_filename: String,
+    playback_filename: Option<String>,
+    recording_date: Option<String>,
+    waveform: Option<crate::audio::Waveform>,
+}
+
+/// Identify the upload at `upload_path` by its bytes, give it its final
+/// name, and make a playback copy if its format needs one. A refused
+/// format deletes the file and is a 400 naming it.
+fn store_upload(
+    audio_dir: &Path,
+    stem: &str,
+    upload_path: &Path,
+    original_filename: &str,
+) -> AppResult<StoredUpload> {
+    let format = match crate::audio_format::detect(upload_path) {
+        Ok(Ok(format)) => format,
+        Ok(Err(unsupported)) => {
+            let _ = std::fs::remove_file(upload_path);
+            return Err(AppError::BadRequest(format!(
+                "{original_filename}: {unsupported}"
+            )));
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(upload_path);
+            return Err(AppError::Io(e));
+        }
+    };
+
+    let storage_filename = format!("{stem}.{}", format.extension());
+    let storage_path = audio_dir.join(&storage_filename);
+    if let Err(e) = std::fs::rename(upload_path, &storage_path) {
+        let _ = std::fs::remove_file(upload_path);
+        return Err(AppError::Io(e));
+    }
+    let playback_filename = format
+        .needs_playback_copy()
+        .then(|| crate::playback::make_copy(audio_dir, &storage_filename))
+        .flatten();
+
+    let playable = audio_dir.join(playback_filename.as_ref().unwrap_or(&storage_filename));
+    Ok(StoredUpload {
+        format,
+        storage_filename,
+        playback_filename,
+        recording_date: extract_recording_date(&playable),
+        waveform: crate::audio::compute(&playable),
+    })
 }
 
 /// Stream a multipart field to disk, enforcing MAX_UPLOAD_BYTES as we
@@ -645,12 +680,10 @@ async fn stream_field_to_file(
 async fn insert_with_unique_name(
     pool: &SqlitePool,
     base: &str,
-    storage_filename: &str,
+    stored: &StoredUpload,
     original_filename: &str,
-    content_type: &str,
     size_bytes: i64,
     uploader_id: i64,
-    recording_date: Option<&str>,
     peaks: Option<&str>,
     duration_seconds: Option<f64>,
 ) -> AppResult<(i64, String)> {
@@ -680,18 +713,27 @@ async fn insert_with_unique_name(
 
         let result = sqlx::query(
             "INSERT INTO clips (name, storage_filename, original_filename, content_type,
-                                size_bytes, uploaded_by, recording_date, peaks, duration_seconds)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                size_bytes, uploaded_by, recording_date, peaks, duration_seconds,
+                                format, playback_filename, playback_content_type)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&candidate)
-        .bind(storage_filename)
+        .bind(&stored.storage_filename)
         .bind(original_filename)
-        .bind(content_type)
+        .bind(stored.format.content_type())
         .bind(size_bytes)
         .bind(uploader_id)
-        .bind(recording_date)
+        .bind(stored.recording_date.as_deref())
         .bind(peaks)
         .bind(duration_seconds)
+        .bind(stored.format.as_str())
+        .bind(stored.playback_filename.as_deref())
+        .bind(
+            stored
+                .playback_filename
+                .as_ref()
+                .map(|_| crate::playback::PLAYBACK_CONTENT_TYPE),
+        )
         .execute(pool)
         .await;
 

@@ -149,7 +149,7 @@ function Uploader() {
             ref={inputRef}
             type="file"
             name="audio"
-            accept="audio/*"
+            accept=".mp3,.m4a,.mp4,.aac,audio/mpeg,audio/mp4,audio/aac"
             multiple
             disabled={uploading}
           />

@@ -70,6 +70,19 @@ pub async fn serve(config: Config, pool: SqlitePool) -> Result<()> {
         );
     }
 
+    // Detect formats and make playback copies for clips stored before
+    // either existed. In the background: the server is usable meanwhile,
+    // those clips just play as they always did until it gets to them.
+    {
+        let pool = pool.clone();
+        let audio_dir = config.audio_dir.clone();
+        tokio::spawn(async move {
+            if let Err(e) = crate::playback::backfill(&pool, &audio_dir).await {
+                tracing::error!(error = ?e, "playback backfill failed");
+            }
+        });
+    }
+
     let listen = config.listen_addr.clone();
     let app = build_app(pool, Arc::new(config)).await?;
     let listener = TcpListener::bind(&listen).await?;

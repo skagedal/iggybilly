@@ -6,6 +6,7 @@
 pub mod api;
 pub mod assets;
 pub mod audio;
+pub mod audio_format;
 pub mod auth;
 pub mod cli;
 pub mod config;
@@ -16,6 +17,7 @@ pub mod error;
 pub mod handlers;
 pub mod markdown;
 pub mod models;
+pub mod playback;
 pub mod queries;
 pub mod tokens;
 pub mod web;

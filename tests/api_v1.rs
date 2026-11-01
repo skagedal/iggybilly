@@ -123,7 +123,7 @@ async fn get(
 async fn upload(srv: &Server, c: &reqwest::Client, token: &str, filenames: &[&str]) -> Vec<i64> {
     let mut form = reqwest::multipart::Form::new();
     for name in filenames {
-        let part = reqwest::multipart::Part::bytes(b"fake-audio-bytes".to_vec())
+        let part = reqwest::multipart::Part::bytes(audio_bytes(name))
             .file_name(name.to_string())
             .mime_str("audio/mpeg")
             .unwrap();
@@ -213,7 +213,11 @@ async fn clips_carry_raw_timestamps_and_their_own_urls() {
 
     assert_eq!(clip["name"], "riff");
     assert_eq!(clip["uploader"], "alice");
-    assert_eq!(clip["audioUrl"], format!("/clips/{id}/audio"));
+    let audio_url = clip["audioUrl"].as_str().unwrap();
+    assert!(
+        audio_url.starts_with(&format!("/clips/{id}/audio?v=")),
+        "{audio_url}"
+    );
     assert_eq!(clip["downloadUrl"], format!("/clips/{id}/audio?download=1"));
     // The uploader may delete their own clip, and the list says so
     // rather than making the client re-derive the rule.
@@ -433,7 +437,7 @@ async fn audio_is_served_to_a_bearer_token() {
         .unwrap();
     assert_eq!(r.status(), 200);
     assert_eq!(r.headers()["content-type"], "audio/mpeg");
-    assert_eq!(r.bytes().await.unwrap().as_ref(), b"fake-audio-bytes");
+    assert_eq!(r.bytes().await.unwrap().as_ref(), audio_bytes("riff.mp3"));
 
     // And refused without one, rather than redirected: a player that
     // followed a redirect would try to decode the login page.
@@ -474,14 +478,21 @@ async fn audio_answers_range_requests() {
         .await
         .unwrap();
     assert_eq!(part.status(), 206, "a Range request gets partial content");
-    assert_eq!(part.headers()["content-range"], "bytes 0-3/16");
-    assert_eq!(part.bytes().await.unwrap().as_ref(), b"fake");
+    let bytes = audio_bytes("riff.mp3");
+    assert_eq!(
+        part.headers()["content-range"],
+        format!("bytes 0-3/{}", bytes.len())
+    );
+    assert_eq!(part.bytes().await.unwrap().as_ref(), &bytes[..4]);
 
     // A range past the end is refused, not silently clamped.
     let past = c
         .get(&url)
         .bearer_auth(&token)
-        .header("range", "bytes=900-999")
+        .header(
+            "range",
+            format!("bytes={}-{}", bytes.len() + 100, bytes.len() + 200),
+        )
         .send()
         .await
         .unwrap();
@@ -737,4 +748,179 @@ async fn a_label_has_a_playlist_route_that_reorders() {
         .map(|clip| clip["id"].as_i64().unwrap())
         .collect();
     assert_eq!(plain, vec![ids[2], ids[1], ids[0]]);
+}
+
+#[tokio::test]
+async fn adts_named_m4a_plays_as_mp4_and_downloads_as_uploaded() {
+    // What some Android recorders produce: bare ADTS AAC with an .m4a
+    // name. Served as audio/mp4, Safari and AVPlayer refuse it.
+    let srv = start().await;
+    let (c, token) = signed_in(&srv).await;
+    let adts = audio_bytes("x.aac");
+    let mut form = reqwest::multipart::Form::new();
+    form = form.part(
+        "audio",
+        reqwest::multipart::Part::bytes(adts.clone()).file_name("Take.aac.m4a"),
+    );
+    let r = c
+        .post(format!("{}/api/v1/clips", srv.base))
+        .bearer_auth(&token)
+        .multipart(form)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let body: serde_json::Value = r.json().await.unwrap();
+    let id = body["clips"][0]["id"].as_i64().unwrap();
+
+    let (_, clip) = get(&srv, &c, &token, &format!("/api/v1/clips/{id}")).await;
+    assert_eq!(clip["contentType"], "audio/mp4", "the type of what plays");
+    let audio_url = clip["audioUrl"].as_str().unwrap();
+    assert!(
+        audio_url.contains("?v="),
+        "versioned for caches: {audio_url}"
+    );
+    assert!(clip["peaks"].is_array(), "the waveform is computed");
+
+    let r = c
+        .get(format!("{}{audio_url}", srv.base))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.headers()["content-type"], "audio/mp4");
+    let played = r.bytes().await.unwrap();
+    assert_eq!(&played[4..8], b"ftyp", "playback is an MP4");
+
+    let r = c
+        .get(format!(
+            "{}{}",
+            srv.base,
+            clip["downloadUrl"].as_str().unwrap()
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.headers()["content-type"], "audio/aac");
+    assert_eq!(
+        r.bytes().await.unwrap().as_ref(),
+        adts,
+        "download is the upload"
+    );
+
+    // Deleting removes both files.
+    let audio_dir = srv._temp.path().join("audio");
+    assert_eq!(std::fs::read_dir(&audio_dir).unwrap().count(), 2);
+    let r = c
+        .delete(format!("{}/api/v1/clips/{id}", srv.base))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_success());
+    assert_eq!(std::fs::read_dir(&audio_dir).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn unsupported_formats_are_refused_by_content() {
+    let srv = start().await;
+    let (c, token) = signed_in(&srv).await;
+    let opus = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/audio/clip.ogg"),
+    )
+    .unwrap();
+    for (name, bytes, says) in [
+        ("voice.ogg", opus.clone(), "This file is Ogg Opus"),
+        // A name the old allow-list accepted doesn't help.
+        ("voice.mp3", opus, "This file is Ogg Opus"),
+        (
+            "notes.mp3",
+            b"<html>hello</html>".to_vec(),
+            "isn't an audio file",
+        ),
+    ] {
+        let form = reqwest::multipart::Form::new().part(
+            "audio",
+            reqwest::multipart::Part::bytes(bytes).file_name(name),
+        );
+        let r = c
+            .post(format!("{}/api/v1/clips", srv.base))
+            .bearer_auth(&token)
+            .multipart(form)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 400, "{name}");
+        let text = r.text().await.unwrap();
+        assert!(text.contains(name), "names the file: {text}");
+        assert!(text.contains(says), "{text}");
+        assert!(text.contains("Upload MP3, M4A or AAC"), "{text}");
+    }
+    let audio_dir = srv._temp.path().join("audio");
+    assert_eq!(
+        std::fs::read_dir(&audio_dir).unwrap().count(),
+        0,
+        "nothing is left on disk"
+    );
+}
+
+#[tokio::test]
+async fn backfill_gives_old_adts_clips_a_playback_copy() {
+    let srv = start().await;
+    let (c, token) = signed_in(&srv).await;
+    let ids = upload(&srv, &c, &token, &["riff.mp3", "take.m4a"]).await;
+
+    // Stored the old way: ADTS bytes under an .m4a name, typed by the
+    // name, and no format recorded.
+    let audio_dir = srv._temp.path().join("audio");
+    std::fs::write(audio_dir.join("old.m4a"), audio_bytes("x.aac")).unwrap();
+    sqlx::query(
+        "UPDATE clips SET storage_filename = 'old.m4a', content_type = 'audio/mp4',
+                          format = NULL, playback_filename = NULL, playback_content_type = NULL
+         WHERE id = ?",
+    )
+    .bind(ids[1])
+    .execute(&srv.pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE clips SET format = NULL WHERE id = ?")
+        .bind(ids[0])
+        .execute(&srv.pool)
+        .await
+        .unwrap();
+
+    iggybilly::playback::backfill(&srv.pool, &audio_dir)
+        .await
+        .unwrap();
+
+    let rows: Vec<(String, String, Option<String>)> =
+        sqlx::query_as("SELECT format, content_type, playback_filename FROM clips ORDER BY id")
+            .fetch_all(&srv.pool)
+            .await
+            .unwrap();
+    assert_eq!(rows[0], ("mp3".into(), "audio/mpeg".into(), None));
+    assert_eq!(rows[1].0, "adts");
+    assert_eq!(rows[1].1, "audio/aac");
+    let copy = rows[1].2.as_ref().expect("a playback copy");
+    assert!(audio_dir.join(copy).exists());
+
+    let (_, clip) = get(&srv, &c, &token, &format!("/api/v1/clips/{}", ids[1])).await;
+    assert_eq!(clip["contentType"], "audio/mp4");
+}
+
+/// Real audio for an upload named `name`, chosen by its extension: the
+/// server identifies files by content and refuses anything else.
+fn audio_bytes(name: &str) -> Vec<u8> {
+    let fixture = match name.rsplit('.').next() {
+        Some("m4a") => "guitar-clip.m4a",
+        Some("aac") => "audio/clip.aac",
+        _ => "audio/clip.mp3",
+    };
+    std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(fixture),
+    )
+    .unwrap()
 }

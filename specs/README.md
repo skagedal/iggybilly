@@ -93,11 +93,15 @@ leaves something open, pick an answer and write it as the spec. Collect
 the picks you are least sure of in a short "Open questions" section at
 the end, so they can be argued with without unpicking the rest.
 
-**The implementation specification** comes second: the migration as
-actual SQL, the routes with their request and response shapes, and the
-real files that change on each of the three sides. It should read as
-instructions to someone who knows the codebase, not as an introduction
-to it.
+**The implementation specification** comes second, and describes how
+the system's behaviour changes to deliver it, not the code that does
+it: what the server checks and stores, what each route serves, what the
+web and the phone do differently, what happens to the data already
+there. Leave out module and function names, SQL, and lists of the files
+that change. Those are for whoever writes the code to decide, and a
+spec that spells them out goes stale as soon as it is implemented. It
+should read as a description for someone who knows the system, not as
+an introduction to it.
 
 Both halves are prose where an argument is being made and lists only
 where the items are genuinely parallel. The point of the document is the

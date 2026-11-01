@@ -1,7 +1,7 @@
 //! What an uploaded file actually is, judged by its bytes, and making a
 //! playable copy of the formats some client can't play as stored.
 //!
-//! See `specs/drafts/audio-formats.md`. The extension and the uploader's
+//! See `specs/implemented/003-audio-formats.md`. The extension and the uploader's
 //! Content-Type play no part: phones misname files, and the served type
 //! has to match the bytes or Safari and AVPlayer refuse them.
 

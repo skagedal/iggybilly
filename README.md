@@ -15,7 +15,7 @@ Android in [`mobile/`](mobile/), talking to the same server.
   not what it is called, and refuses other formats. AAC without a
   container plays from an MP4 copy made at upload, which iPhones need;
   Download still gives back the file as uploaded. See
-  [`specs/drafts/audio-formats.md`](specs/drafts/audio-formats.md).
+  [`specs/implemented/003-audio-formats.md`](specs/implemented/003-audio-formats.md).
 - Each user can delete clips they uploaded (from the clip's own page);
   the row, its labels, and the audio file on disk all go with it. You
   can't delete someone else's clip.

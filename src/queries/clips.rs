@@ -36,6 +36,11 @@ pub struct Clip {
     /// hundred floats per clip are never parsed just to be re-emitted.
     pub peaks: Option<Box<RawValue>>,
     pub duration_seconds: Option<f64>,
+    /// The file playing the clip streams: the playback copy when there
+    /// is one, else the upload itself.
+    pub playback_filename: String,
+    /// The type of `playback_filename`'s bytes.
+    pub playback_content_type: String,
 }
 
 /// The columns every clip read selects, in the order `row_to_clip`
@@ -43,7 +48,9 @@ pub struct Clip {
 /// cannot drift apart.
 const CLIP_COLUMNS: &str = "c.id, c.name, c.original_filename, c.content_type,
      c.uploaded_at, c.recording_date, u.username, c.uploaded_by,
-     c.peaks, c.duration_seconds";
+     c.peaks, c.duration_seconds,
+     COALESCE(c.playback_filename, c.storage_filename),
+     COALESCE(c.playback_content_type, c.content_type)";
 
 type ClipRow = (
     i64,
@@ -56,6 +63,8 @@ type ClipRow = (
     i64,
     Option<String>,
     Option<f64>,
+    String,
+    String,
 );
 
 fn row_to_clip(row: ClipRow, labels: Vec<Label>) -> Clip {
@@ -70,6 +79,8 @@ fn row_to_clip(row: ClipRow, labels: Vec<Label>) -> Clip {
         uploaded_by,
         peaks,
         duration_seconds,
+        playback_filename,
+        playback_content_type,
     ) = row;
     Clip {
         id,
@@ -83,6 +94,8 @@ fn row_to_clip(row: ClipRow, labels: Vec<Label>) -> Clip {
         labels,
         peaks: peaks.and_then(|s| RawValue::from_string(s).ok()),
         duration_seconds,
+        playback_filename,
+        playback_content_type,
     }
 }
 
@@ -207,25 +220,31 @@ pub async fn exists(pool: &SqlitePool, clip_id: i64) -> AppResult<bool> {
 }
 
 /// What `audio` needs to serve the bytes: where they are, what to call
-/// the type, and the name to offer on download.
+/// the type, and the name to offer on download. The upload and its
+/// playback copy, when there is one.
 pub struct AudioFile {
     pub storage_filename: String,
     pub content_type: String,
     pub original_filename: String,
+    pub playback: Option<(String, String)>,
 }
 
 pub async fn audio_file(pool: &SqlitePool, id: i64) -> AppResult<Option<AudioFile>> {
-    let row: Option<(String, String, String)> = sqlx::query_as(
-        "SELECT storage_filename, content_type, original_filename FROM clips WHERE id = ?",
+    type Row = (String, String, String, Option<String>, Option<String>);
+    let row: Option<Row> = sqlx::query_as(
+        "SELECT storage_filename, content_type, original_filename,
+                playback_filename, playback_content_type
+         FROM clips WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(pool)
     .await?;
     Ok(row.map(
-        |(storage_filename, content_type, original_filename)| AudioFile {
+        |(storage_filename, content_type, original_filename, pf, pct)| AudioFile {
             storage_filename,
             content_type,
             original_filename,
+            playback: pf.zip(pct),
         },
     ))
 }

@@ -103,14 +103,32 @@ class TrackCache extends ChangeNotifier {
   /// The identity of a clip's audio, as far as the cache is concerned.
   ///
   /// The absolute URL with the query dropped: clip ids are only unique
-  /// within one server, so the server has to be part of the key, and
-  /// `?download=1` names the same bytes as the bare path.
+  /// within one server, so the server has to be part of the key. Which
+  /// file the server streams for the clip is the `v` parameter, held
+  /// beside the entry rather than in its key, so a clip that gains a
+  /// playback copy keeps its place and its "keep downloaded".
   static String keyFor(Uri url) => Uri(
         scheme: url.scheme,
         host: url.host,
         port: url.hasPort ? url.port : null,
         path: url.path,
       ).toString();
+
+  static String? _versionOf(Uri url) => url.queryParameters['v'];
+
+  /// The entry for [url], unless it holds a different file from the one
+  /// the server now streams. An entry from before versions were recorded
+  /// is taken as current: almost every clip's bytes are unchanged, and
+  /// one that no longer plays is forgotten by the player on first try.
+  _Entry? _current(Uri url) {
+    final entry = _entries[keyFor(url)];
+    if (entry == null) return null;
+    final version = _versionOf(url);
+    if (entry.version != null && version != null && entry.version != version) {
+      return null;
+    }
+    return entry;
+  }
 
   /// The local copy of [url]'s audio, or null when there isn't one.
   ///
@@ -119,13 +137,13 @@ class TrackCache extends ChangeNotifier {
   /// an await there is a frame in which the bar has nothing to say.
   File? fileFor(Uri url) {
     final directory = _directory;
-    final entry = _entries[keyFor(url)];
+    final entry = _current(url);
     if (directory == null || entry == null) return null;
     return File(p.join(directory.path, entry.file));
   }
 
   /// Whether [url] is on disk at all, cached or kept.
-  bool hasCopy(Uri url) => _entries.containsKey(keyFor(url));
+  bool hasCopy(Uri url) => _current(url) != null;
 
   /// Whether the user asked to keep [url] rather than let it be evicted.
   bool isKept(Uri url) => _entries[keyFor(url)]?.kept ?? false;
@@ -197,7 +215,7 @@ class TrackCache extends ChangeNotifier {
       await _updateKept(key, false);
       return false;
     }
-    if (_entries.containsKey(key)) {
+    if (_current(url) != null) {
       await _updateKept(key, true);
       return true;
     }
@@ -340,7 +358,7 @@ class TrackCache extends ChangeNotifier {
     if (directory == null) return null;
 
     final existing = _entries[key];
-    if (existing != null) {
+    if (existing != null && _current(url) != null) {
       if (kept && !existing.kept) await _updateKept(key, true);
       return File(p.join(directory.path, existing.file));
     }
@@ -390,14 +408,19 @@ class TrackCache extends ChangeNotifier {
       return null;
     }
 
+    // A copy of a file the server no longer streams is replaced, and
+    // whatever was promised about it carries over.
+    final superseded = _entries[key];
+    if (superseded != null) await _delete(superseded);
     _entries[key] = _Entry(
       key: key,
       clipId: clip.id,
       name: clip.name,
       file: name,
+      version: _versionOf(url),
       bytes: written,
       playedAt: DateTime.now().toUtc(),
-      kept: kept,
+      kept: kept || (superseded?.kept ?? false),
     );
     // Protected: evicting what we just fetched to play would be absurd,
     // even when it alone is over the ceiling.
@@ -565,6 +588,7 @@ class _Entry {
     required this.clipId,
     required this.name,
     required this.file,
+    required this.version,
     required this.bytes,
     required this.playedAt,
     required this.kept,
@@ -585,6 +609,7 @@ class _Entry {
       clipId: json['clipId'] as int? ?? 0,
       name: json['name'] as String? ?? '',
       file: file,
+      version: json['version'] as String?,
       bytes: bytes,
       playedAt: playedAt,
       kept: json['kept'] as bool? ?? false,
@@ -595,6 +620,10 @@ class _Entry {
   final int clipId;
   final String name;
   final String file;
+
+  /// The `v` of the URL this was fetched from: which of the clip's files
+  /// it is. Null for entries written before it was recorded.
+  final String? version;
   final int bytes;
 
   /// UTC. The index outlives a time zone change.
@@ -606,6 +635,7 @@ class _Entry {
         clipId: clipId,
         name: currentName,
         file: file,
+        version: version,
         bytes: bytes,
         playedAt: DateTime.now().toUtc(),
         kept: kept,
@@ -616,6 +646,7 @@ class _Entry {
         clipId: clipId,
         name: name,
         file: file,
+        version: version,
         bytes: bytes,
         playedAt: playedAt,
         kept: value,
@@ -626,6 +657,7 @@ class _Entry {
         'clipId': clipId,
         'name': name,
         'file': file,
+        if (version != null) 'version': version,
         'bytes': bytes,
         'playedAt': playedAt.toIso8601String(),
         'kept': kept,

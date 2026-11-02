@@ -13,13 +13,7 @@ const _audioExtensions = [
   'mp3',
   'm4a',
   'mp4',
-  'wav',
-  'flac',
-  'ogg',
-  'oga',
-  'opus',
   'aac',
-  'webm',
 ];
 
 /// What the server will take for one clip. Checked here as well so an

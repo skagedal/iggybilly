@@ -11,7 +11,7 @@ axum-extra = { version = "0.10", features = ["query"] }
 # tower-http's ServeFile.
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["fs", "trace", "limit"] }
-tower-sessions = "0.14"
+tower-sessions = "0.15"
 tower-sessions-sqlx-store = { version = "0.15", features = ["sqlite"] }
 
 # Async runtime

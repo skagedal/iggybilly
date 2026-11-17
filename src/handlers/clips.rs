@@ -413,10 +413,9 @@ pub async fn audio(
     // server ignores Range and returns the whole body with a 200, which is
     // what this route used to do. A browser's <audio> tolerates it, so the
     // web worked and the app did not.
-    let response = ServeFile::new(&path)
-        .oneshot(request)
-        .await
-        .map_err(|e| AppError::Io(std::io::Error::other(e)))?;
+    // ServeFile's error is Infallible: a missing or unreadable file is a
+    // response, not an error.
+    let Ok(response) = ServeFile::new(&path).oneshot(request).await;
 
     if response.status() == StatusCode::NOT_FOUND {
         // The row exists but its bytes don't.

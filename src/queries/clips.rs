@@ -3,6 +3,7 @@
 use serde_json::value::RawValue;
 use sqlx::SqlitePool;
 
+use crate::audio_format::AudioFormat;
 use crate::error::AppResult;
 
 /// A label as the database holds it. The web turns this into a filter
@@ -41,6 +42,18 @@ pub struct Clip {
     pub playback_filename: String,
     /// The type of `playback_filename`'s bytes.
     pub playback_content_type: String,
+    /// As detected from the upload's bytes (`mp3`, `midi`, …), or None
+    /// for a clip the startup pass hasn't looked at yet.
+    pub format: Option<String>,
+    /// Whether there is anything for a media player to play: false only
+    /// for a MIDI file with no rendered copy.
+    pub playable: bool,
+}
+
+/// What `format` says about a stored clip with or without a playback
+/// copy. A clip whose format isn't known yet was uploaded as audio.
+pub fn is_playable(format: Option<&str>, has_playback_copy: bool) -> bool {
+    has_playback_copy || format != Some(AudioFormat::Midi.as_str())
 }
 
 /// The columns every clip read selects, in the order `row_to_clip`
@@ -50,7 +63,8 @@ const CLIP_COLUMNS: &str = "c.id, c.name, c.original_filename, c.content_type,
      c.uploaded_at, c.recording_date, u.username, c.uploaded_by,
      c.peaks, c.duration_seconds,
      COALESCE(c.playback_filename, c.storage_filename),
-     COALESCE(c.playback_content_type, c.content_type)";
+     COALESCE(c.playback_content_type, c.content_type),
+     c.format, c.playback_filename IS NOT NULL";
 
 type ClipRow = (
     i64,
@@ -65,6 +79,8 @@ type ClipRow = (
     Option<f64>,
     String,
     String,
+    Option<String>,
+    bool,
 );
 
 fn row_to_clip(row: ClipRow, labels: Vec<Label>) -> Clip {
@@ -81,6 +97,8 @@ fn row_to_clip(row: ClipRow, labels: Vec<Label>) -> Clip {
         duration_seconds,
         playback_filename,
         playback_content_type,
+        format,
+        has_playback_copy,
     ) = row;
     Clip {
         id,
@@ -96,6 +114,8 @@ fn row_to_clip(row: ClipRow, labels: Vec<Label>) -> Clip {
         duration_seconds,
         playback_filename,
         playback_content_type,
+        playable: is_playable(format.as_deref(), has_playback_copy),
+        format,
     }
 }
 
@@ -227,24 +247,33 @@ pub struct AudioFile {
     pub content_type: String,
     pub original_filename: String,
     pub playback: Option<(String, String)>,
+    pub format: Option<String>,
 }
 
 pub async fn audio_file(pool: &SqlitePool, id: i64) -> AppResult<Option<AudioFile>> {
-    type Row = (String, String, String, Option<String>, Option<String>);
+    type Row = (
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
     let row: Option<Row> = sqlx::query_as(
         "SELECT storage_filename, content_type, original_filename,
-                playback_filename, playback_content_type
+                playback_filename, playback_content_type, format
          FROM clips WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(pool)
     .await?;
     Ok(row.map(
-        |(storage_filename, content_type, original_filename, pf, pct)| AudioFile {
+        |(storage_filename, content_type, original_filename, pf, pct, format)| AudioFile {
             storage_filename,
             content_type,
             original_filename,
             playback: pf.zip(pct),
+            format,
         },
     ))
 }

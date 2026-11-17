@@ -38,6 +38,10 @@ pub struct ClipRow {
     /// floats per clip just to re-serialise them.
     pub peaks: Option<Box<RawValue>>,
     pub duration_seconds: Option<f64>,
+    /// As detected from the bytes: `midi` is the one the list marks.
+    pub format: Option<String>,
+    /// False for a MIDI file with nothing rendered to play.
+    pub playable: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -99,6 +103,8 @@ fn clip_row(clip: queries::clips::Clip, active: &[&str]) -> ClipRow {
         labels,
         peaks: clip.peaks,
         duration_seconds: clip.duration_seconds,
+        format: clip.format,
+        playable: clip.playable,
     }
 }
 
@@ -238,6 +244,8 @@ struct ClipDetail {
     /// Whether the current user may delete this clip. True only for the
     /// uploader — you can remove your own clips, nobody else's.
     can_delete: bool,
+    format: Option<String>,
+    playable: bool,
 }
 
 #[derive(Serialize)]
@@ -277,6 +285,8 @@ pub async fn detail(
                 peaks: clip.peaks,
                 duration_seconds: clip.duration_seconds,
                 can_delete,
+                format: clip.format,
+                playable: clip.playable,
             },
         },
     )
@@ -379,7 +389,14 @@ pub async fn audio(
         content_type,
         original_filename,
         playback,
+        format,
     } = file_row;
+
+    // A MIDI file with nothing rendered has nothing to stream: a media
+    // element handed the MIDI bytes would only fail to decode them.
+    if q.download.is_none() && !queries::clips::is_playable(format.as_deref(), playback.is_some()) {
+        return Err(AppError::NotFound);
+    }
 
     // Playing streams the playback copy when there is one; Download is
     // always the upload, byte for byte.
@@ -577,7 +594,7 @@ pub(crate) async fn ingest(
 
     if uploaded.is_empty() {
         return Err(AppError::BadRequest(
-            "at least one audio file is required".into(),
+            "at least one audio or MIDI file is required".into(),
         ));
     }
     // One Discord post for the whole batch, fire-and-forget.
@@ -640,6 +657,15 @@ fn store_upload(
         .then(|| crate::playback::make_copy(audio_dir, &storage_filename))
         .flatten();
 
+    if !format.is_audio() {
+        return Ok(StoredUpload {
+            format,
+            storage_filename,
+            playback_filename,
+            recording_date: None,
+            waveform: None,
+        });
+    }
     let playable = audio_dir.join(playback_filename.as_ref().unwrap_or(&storage_filename));
     Ok(StoredUpload {
         format,

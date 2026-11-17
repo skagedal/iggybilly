@@ -96,7 +96,13 @@ class FakeEngine implements AudioEngine {
   }
 }
 
-Clip clipFixture({int id = 1, String name = 'riff', Duration? duration}) => Clip(
+Clip clipFixture({
+  int id = 1,
+  String name = 'riff',
+  Duration? duration,
+  bool midi = false,
+}) =>
+    Clip(
       id: id,
       name: name,
       originalFilename: '$name.mp3',
@@ -110,6 +116,8 @@ Clip clipFixture({int id = 1, String name = 'riff', Duration? duration}) => Clip
       audioPath: '/clips/$id/audio',
       downloadPath: '/clips/$id/audio?download=1',
       canDelete: true,
+      format: midi ? 'midi' : 'mp3',
+      playable: !midi,
     );
 
 void main() {
@@ -518,6 +526,24 @@ void main() {
 
       await finish();
       expect(player.clip!.id, 3, reason: 'next is what follows it now');
+    });
+
+    test('leaves out MIDI files with nothing to play', () async {
+      final mixed = [set[0], clipFixture(id: 9, midi: true), set[1]];
+      await player.playQueue(mixed, 1, source: 'set', urlFor: urlFor);
+      expect(player.queue.map((c) => c.id), [1, 2]);
+
+      await player.setQueueTracks('set', [mixed[1], set[1], set[0]]);
+      expect(player.queue.map((c) => c.id), [2, 1]);
+
+      await finish();
+      expect(player.clip!.id, isNot(9));
+    });
+
+    test('will not start a MIDI file with nothing to play', () async {
+      await player.play(clipFixture(id: 9, midi: true), urlFor(set[0]));
+      expect(player.clip, isNull);
+      expect(engine.loaded, isEmpty);
     });
 
     test("another label's reorder does not touch it", () async {

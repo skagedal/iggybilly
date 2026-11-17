@@ -855,7 +855,7 @@ async fn unsupported_formats_are_refused_by_content() {
         let text = r.text().await.unwrap();
         assert!(text.contains(name), "names the file: {text}");
         assert!(text.contains(says), "{text}");
-        assert!(text.contains("Upload MP3, M4A or AAC"), "{text}");
+        assert!(text.contains("Upload MP3, M4A, AAC or MIDI"), "{text}");
     }
     let audio_dir = srv._temp.path().join("audio");
     assert_eq!(
@@ -907,6 +907,117 @@ async fn backfill_gives_old_adts_clips_a_playback_copy() {
 
     let (_, clip) = get(&srv, &c, &token, &format!("/api/v1/clips/{}", ids[1])).await;
     assert_eq!(clip["contentType"], "audio/mp4");
+}
+
+#[tokio::test]
+async fn midi_files_are_clips_that_download_but_do_not_stream() {
+    let srv = start().await;
+    let (c, token) = signed_in(&srv).await;
+    let groove = midi_bytes("groove.mid");
+    let form = reqwest::multipart::Form::new().part(
+        "audio",
+        reqwest::multipart::Part::bytes(groove.clone()).file_name("Groove.mid"),
+    );
+    let r = c
+        .post(format!("{}/api/v1/clips", srv.base))
+        .bearer_auth(&token)
+        .multipart(form)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let body: serde_json::Value = r.json().await.unwrap();
+    let id = body["clips"][0]["id"].as_i64().unwrap();
+    assert_eq!(body["clips"][0]["name"], "Groove");
+
+    let (_, clip) = get(&srv, &c, &token, &format!("/api/v1/clips/{id}")).await;
+    assert_eq!(clip["format"], "midi");
+    assert_eq!(clip["playable"], false);
+    assert!(clip["peaks"].is_null());
+    assert!(clip["recordingDate"].is_null());
+
+    let audio_url = clip["audioUrl"].as_str().expect("still a string");
+    let r = c
+        .get(format!("{}{audio_url}", srv.base))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404, "nothing to stream");
+
+    let r = c
+        .get(format!(
+            "{}{}",
+            srv.base,
+            clip["downloadUrl"].as_str().unwrap()
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(r.headers()["content-type"], "audio/midi");
+    assert!(r.headers()["content-disposition"]
+        .to_str()
+        .unwrap()
+        .contains("Groove.mid"));
+    assert_eq!(r.bytes().await.unwrap().as_ref(), groove);
+
+    // Labels and playlists treat it like any clip.
+    let audio = upload(&srv, &c, &token, &["take.mp3"]).await[0];
+    for clip_id in [audio, id] {
+        let r = c
+            .post(format!("{}/api/v1/clips/{clip_id}/labels", srv.base))
+            .bearer_auth(&token)
+            .json(&serde_json::json!({ "name": "groove" }))
+            .send()
+            .await
+            .unwrap();
+        assert!(r.status().is_success());
+    }
+    let (_, list) = get(&srv, &c, &token, "/api/v1/clips?label=groove").await;
+    assert_eq!(list.as_array().unwrap().len(), 2);
+    let (_, take) = get(&srv, &c, &token, &format!("/api/v1/clips/{audio}")).await;
+    assert_eq!(take["format"], "mp3");
+    assert_eq!(take["playable"], true);
+}
+
+#[tokio::test]
+async fn midi_of_a_kind_we_cannot_use_is_refused() {
+    let srv = start().await;
+    let (c, token) = signed_in(&srv).await;
+    let mut truncated = midi_bytes("groove.mid");
+    truncated.truncate(10);
+    for (name, bytes, says) in [
+        ("song.mid", midi_bytes("sequences.mid"), "type 2"),
+        ("song.rmi", midi_bytes("groove.rmi"), "RMID"),
+        ("song.mid", truncated, "couldn't be read"),
+    ] {
+        let form = reqwest::multipart::Form::new().part(
+            "audio",
+            reqwest::multipart::Part::bytes(bytes).file_name(name),
+        );
+        let r = c
+            .post(format!("{}/api/v1/clips", srv.base))
+            .bearer_auth(&token)
+            .multipart(form)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 400, "{says}");
+        let text = r.text().await.unwrap();
+        assert!(text.contains(says), "{text}");
+        assert!(text.contains("Upload MP3, M4A, AAC or MIDI"), "{text}");
+    }
+}
+
+fn midi_bytes(name: &str) -> Vec<u8> {
+    std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/midi")
+            .join(name),
+    )
+    .unwrap()
 }
 
 /// Real audio for an upload named `name`, chosen by its extension: the

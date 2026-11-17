@@ -1,17 +1,23 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
 import '../format.dart';
 import 'app_scope.dart';
+import 'clip_format.dart';
 import 'common.dart';
 import 'keep_downloaded.dart';
 import 'label_picker.dart';
 import 'waveform.dart';
 import 'wiki_page.dart';
 
-/// One clip: play it, rename it, label it, read its labels' notes, and —
-/// if you uploaded it — delete it.
+/// One clip: play it, share its file, rename it, label it, read its
+/// labels' notes, and — if you uploaded it — delete it.
 ///
 /// Pops with `true` when something changed, so the list behind it
 /// reloads rather than showing a name or a label that is no longer
@@ -29,6 +35,7 @@ class _ClipPageState extends State<ClipPage> {
   Clip? _clip;
   String? _error;
   bool _changed = false;
+  bool _sharing = false;
 
   @override
   void initState() {
@@ -69,6 +76,40 @@ class _ClipPageState extends State<ClipPage> {
     });
     // The bar is showing the old name if this is the loaded clip.
     AppScope.of(context).player.renamed(clip.id, settled);
+  }
+
+  /// Fetch the file as uploaded and hand it to the system share sheet,
+  /// from where it can be saved to Files or opened in another app.
+  ///
+  /// The copy is left in place when the sheet closes, because on Android
+  /// the receiving app may read it after that, and cleared at the start
+  /// of the next share instead.
+  Future<void> _share(Rect? origin) async {
+    final clip = _clip!;
+    setState(() => _sharing = true);
+    try {
+      final bytes = await guard(
+        context,
+        () => sessionOf(context).api.download(clip.downloadPath),
+        whileDoing: "Couldn't fetch the file",
+      );
+      if (bytes == null || !mounted) return;
+
+      final dir = Directory(
+        p.join((await getTemporaryDirectory()).path, 'shared'),
+      );
+      if (await dir.exists()) await dir.delete(recursive: true);
+      await dir.create(recursive: true);
+      final name = p.basename(clip.originalFilename);
+      final file = File(p.join(dir.path, name.isEmpty ? 'clip' : name));
+      await file.writeAsBytes(bytes);
+
+      await SharePlus.instance.share(
+        ShareParams(files: [XFile(file.path)], sharePositionOrigin: origin),
+      );
+    } finally {
+      if (mounted) setState(() => _sharing = false);
+    }
   }
 
   Future<void> _addLabel() async {
@@ -139,8 +180,39 @@ class _ClipPageState extends State<ClipPage> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: Text(clip?.name ?? 'Clip'),
+          title: Row(
+            children: [
+              Flexible(child: Text(clip?.name ?? 'Clip')),
+              if (clip != null && clip.isMidi) ...[
+                const SizedBox(width: 8),
+                FormatBadge(clip: clip),
+              ],
+            ],
+          ),
           actions: [
+            if (clip != null)
+              Builder(
+                builder: (context) => IconButton(
+                  tooltip: 'Share file',
+                  icon: _sharing
+                      ? const SizedBox.square(
+                          dimension: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Icon(Icons.adaptive.share),
+                  onPressed: _sharing
+                      ? null
+                      : () {
+                          // iPads anchor the share popover to the button.
+                          final box = context.findRenderObject() as RenderBox?;
+                          _share(
+                            box == null
+                                ? null
+                                : box.localToGlobal(Offset.zero) & box.size,
+                          );
+                        },
+                ),
+              ),
             if (clip != null)
               IconButton(
                 tooltip: 'Rename',
@@ -177,52 +249,68 @@ class _ClipPageState extends State<ClipPage> {
         physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 40),
         children: [
-          ListenableBuilder(
-            listenable: player,
-            builder: (context, _) {
-              final isLoaded = player.clip?.id == clip.id;
-              final isPlaying = isLoaded && player.isPlaying;
-              return Column(
-                children: [
-                  Waveform(
-                    peaks: clip.peaks,
-                    progress: isLoaded ? player.progress : 0,
-                    height: 72,
-                    // Seeking only makes sense on the clip that is
-                    // actually loaded.
-                    onSeek: isLoaded ? player.seekFraction : null,
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      IconButton.filled(
-                        iconSize: 34,
-                        icon: Icon(isPlaying ? Icons.pause : Icons.play_arrow),
-                        tooltip: isPlaying ? 'Pause' : 'Play',
-                        onPressed: () => player.play(
-                          clip,
-                          session.api.resolve(clip.audioPath),
-                          headers: session.api.authHeaders,
+          if (!clip.playable)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              child: Text(
+                unplayableMessage,
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
+              ),
+            )
+          else
+            ListenableBuilder(
+              listenable: player,
+              builder: (context, _) {
+                final isLoaded = player.clip?.id == clip.id;
+                final isPlaying = isLoaded && player.isPlaying;
+                return Column(
+                  children: [
+                    Waveform(
+                      peaks: clip.peaks,
+                      progress: isLoaded ? player.progress : 0,
+                      height: 72,
+                      // Seeking only makes sense on the clip that is
+                      // actually loaded.
+                      onSeek: isLoaded ? player.seekFraction : null,
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        IconButton.filled(
+                          iconSize: 34,
+                          icon: Icon(
+                            isPlaying ? Icons.pause : Icons.play_arrow,
+                          ),
+                          tooltip: isPlaying ? 'Pause' : 'Play',
+                          onPressed: () => player.play(
+                            clip,
+                            session.api.resolve(clip.audioPath),
+                            headers: session.api.authHeaders,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 16),
-                      Text(
-                        isLoaded && player.duration != null
-                            ? '${formatDuration(player.position)} / ${formatDuration(player.duration!)}'
-                            : clip.duration == null
-                                ? '—'
-                                : formatDuration(clip.duration!),
-                        style: theme.textTheme.titleMedium,
-                      ),
-                    ],
-                  ),
-                ],
-              );
-            },
-          ),
-          const SizedBox(height: 16),
-          KeepDownloadedTile(clip: clip),
+                        const SizedBox(width: 16),
+                        Text(
+                          isLoaded && player.duration != null
+                              ? '${formatDuration(player.position)} / ${formatDuration(player.duration!)}'
+                              : clip.duration == null
+                              ? '—'
+                              : formatDuration(clip.duration!),
+                          style: theme.textTheme.titleMedium,
+                        ),
+                      ],
+                    ),
+                  ],
+                );
+              },
+            ),
+          if (clip.playable) ...[
+            const SizedBox(height: 16),
+            KeepDownloadedTile(clip: clip),
+          ],
           const SizedBox(height: 16),
           _Facts(clip: clip),
           const SizedBox(height: 24),

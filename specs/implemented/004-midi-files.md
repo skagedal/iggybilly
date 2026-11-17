@@ -1,8 +1,13 @@
 # MIDI files
 
 Implements [#55](https://github.com/skagedal/iggybilly/issues/55), requested by Jonas.
-Complements [003-audio-formats](../implemented/003-audio-formats.md),
-whose playback copy this reuses.
+Complements [003-audio-formats](003-audio-formats.md), whose playback
+copy this reuses.
+
+> **Only part 1 is built.** This spec moved here when MIDI files could
+> be uploaded, downloaded, shared and labelled, but not yet played. What
+> it says about part 2, rendering them to audio, is still the plan as
+> written, not a record of what was built.
 
 Some of what the band shares isn't a recording. A drum pattern
 programmed in a DAW, a bass line someone sketched, an arrangement
@@ -58,10 +63,13 @@ are Standard MIDI Files and are accepted by the same rule. Type 2
 (several independent sequences in one file) is refused, as is RMID (MIDI
 wrapped in a RIFF container): neither is produced by anything the band
 uses, and both would need their own handling. A refused upload gets the
-existing message pattern: *"This file is a MIDI file of a kind we don't
-support at the moment. Talk to Simon if you want to change this.
-Upload MP3, M4A, AAC or MIDI."* The list of accepted formats in every
-refusal message gains "or MIDI".
+existing message pattern, naming which it was: *"This file is a MIDI
+file with several independent sequences (type 2), which we don't
+support at the moment. Talk to Simon if you want to change this. Upload
+MP3, M4A, AAC or MIDI."*, or *"… a MIDI file in a RIFF container
+(RMID) …"*. A file that starts like MIDI but doesn't parse gets *"This
+looks like a MIDI file, but it couldn't be read."* The list of accepted
+formats at the end of every refusal message gains "or MIDI".
 
 The size cap stays at 10 MB. A large MIDI file is a few hundred
 kilobytes.
@@ -82,10 +90,9 @@ hands it to the system share sheet, from where it can be saved to Files,
 opened in another app, or sent. It applies to every clip, not just MIDI:
 having it for one kind and not the other would be odd, and sharing the
 original of a recording is useful for the same reasons. While the file
-is fetched the action shows progress; offline, it is disabled with the
-same "needs a connection" treatment other network actions have, unless
-the clip's original happens to be what is cached (an MP3 or M4A without
-a playback copy), in which case it shares the cached file.
+is fetched the action shows progress. It always fetches from the
+server, so offline it fails with the same message any other request
+gives, even for a clip that is kept downloaded.
 
 ### Labels and playlists
 
@@ -107,11 +114,13 @@ setup."* General MIDI is the convention nearly every exported file
 follows, so the drum track lands on drums and the bass on a bass, which
 is what matters for hearing the part.
 
-A MIDI clip that can't be played says so where the play button would
-be, and is skipped in a playlist the way a clip that fails to load is
-skipped today. That happens when the file has no notes (some exports
-carry only a tempo map), or when rendering it failed. The badge, labels
-and Download all still work.
+A MIDI clip that can't be played says so where the waveform would be,
+its play button is disabled, and it is left out of a playlist's queue,
+so playing through a playlist goes straight past it. In the app it has
+no "keep downloaded" switch, as there is nothing to keep. That happens
+when the file has no notes (some exports carry only a tempo map), or
+when rendering it failed. The badge, labels, Download and Share file
+all still work.
 
 Between part 1 shipping and part 2 shipping, every MIDI clip is in that
 state, with the text *"Playback for MIDI files is coming."* When part 2
@@ -131,11 +140,14 @@ next clip. Nothing crashes, and updating the app fixes it.
 
 Detection gains MIDI: a Standard MIDI File starts with an `MThd` chunk
 whose header gives the type, and the file is accepted when the type is 0
-or 1 and it parses as a whole, its tracks read to the end without error.
-Checking the whole file rather than the header is cheap at MIDI sizes
-and means a truncated upload is refused at the door rather than failing
-later in rendering. RIFF-wrapped RMID and type 2 are recognised and
-named in the refusal.
+or 1 and the whole file parses, with [midly](https://github.com/kovaxis/midly).
+Parsing the whole file rather than the header is cheap at MIDI sizes and
+refuses a file that only starts like MIDI. midly runs in its lenient
+mode, which accepts the small irregularities exported files often have,
+and with them a track cut short, which keeps the events before the cut.
+Refusing those would turn away files every other program opens. RMID is
+recognised by its RIFF header and type 2 by the MIDI header, and both
+are named in the refusal.
 
 A MIDI clip records its format as `midi` and its content type as
 `audio/midi`, and is stored in the audio directory under a `.mid` name
@@ -162,13 +174,20 @@ at the 404, which is exactly the failure older apps already handle.
 
 ### The app
 
-The badge, the "can't be played" state, skipping unplayable clips when
-building a queue (rather than discovering them by failing), the MIDI
-extensions in the picker, and the Share file action. Share fetches the
-API's existing download URL with the bearer token into a temporary file
-named with the original filename, and passes it to the platform share
-sheet, which needs a new dependency; the temporary file is deleted when
-the sheet closes.
+The badge, the "can't be played" state, the MIDI extensions in the
+picker, and the Share file action. The player leaves unplayable clips
+out of any queue it is given, rather than discovering them by failing,
+and won't start one on its own.
+
+Share fetches the API's existing download URL with the bearer token
+into a temporary file named with the original filename, and passes it
+to the platform share sheet through `share_plus`. The file is not
+deleted when the sheet closes, because on Android the app it was shared
+to may still be reading it. Each share clears the previous one's file
+instead, and the system clears the temporary directory in its own time.
+
+The web works the same way: the badge, the same text in place of the
+waveform, and unplayable clips left out of a playlist's queue.
 
 ### Rendering (part 2)
 

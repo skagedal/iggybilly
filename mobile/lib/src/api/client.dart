@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io' show SocketException;
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -183,6 +184,25 @@ class IggybillyApi {
     return list
         .map((c) => UploadedClip.fromJson(c as Map<String, dynamic>))
         .toList(growable: false);
+  }
+
+  /// The bytes at a clip's `downloadUrl`: the file as it was uploaded.
+  Future<Uint8List> download(String path) async {
+    final http.Response response;
+    try {
+      response = await _http.get(resolve(path), headers: authHeaders);
+    } on SocketException catch (e) {
+      throw ApiException(_networkMessage(e));
+    } on http.ClientException catch (e) {
+      throw ApiException(_networkMessage(e));
+    }
+    if (response.statusCode != 200) {
+      throw ApiException(
+        'The server returned ${response.statusCode}.',
+        statusCode: response.statusCode,
+      );
+    }
+    return response.bodyBytes;
   }
 
   // -- Labels -------------------------------------------------------------

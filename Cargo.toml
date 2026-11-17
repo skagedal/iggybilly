@@ -75,6 +75,12 @@ comrak = { version = "0.52", default-features = false }
 # mvhd header (see handlers/clips.rs).
 symphonia = { version = "0.6", features = ["mp3", "aac", "isomp4", "alac"] }
 
+# Reading Standard MIDI Files, to accept or refuse a MIDI upload.
+# Lenient (no "strict" feature), because exported files often have small
+# irregularities that every player shrugs off. "parallel" would pull in
+# rayon for files that are a few hundred kilobytes.
+midly = { version = "0.5", default-features = false, features = ["std"] }
+
 [profile.release]
 strip = true
 lto = "thin"

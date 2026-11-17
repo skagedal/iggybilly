@@ -55,6 +55,14 @@ pub struct Clip {
     /// Whether the caller may delete this clip: only its uploader may.
     /// Sent on every clip so the app never has to re-derive the rule.
     can_delete: bool,
+    /// As detected from the upload's bytes: `mp4-aac`, `mp3`, `adts` or
+    /// `midi`. Null until the server has looked at an old clip.
+    format: Option<String>,
+    /// False when `audio_url` has nothing to play: a MIDI file with no
+    /// rendered copy. `audio_url` is still sent, and answers 404, because
+    /// installed apps expect a string there and already handle a clip
+    /// that fails to load.
+    playable: bool,
 }
 
 pub(super) fn clip(c: queries::clips::Clip, viewer_id: i64) -> Clip {
@@ -83,6 +91,8 @@ pub(super) fn clip(c: queries::clips::Clip, viewer_id: i64) -> Clip {
             .collect(),
         peaks: c.peaks,
         duration_seconds: c.duration_seconds,
+        format: c.format,
+        playable: c.playable,
     }
 }
 

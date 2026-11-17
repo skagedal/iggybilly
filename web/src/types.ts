@@ -32,6 +32,10 @@ export interface ClipSummary {
   /** Precomputed waveform samples, or null when we couldn't decode. */
   peaks: number[] | null;
   durationSeconds: number | null;
+  /** As detected from the bytes: "mp4-aac", "mp3", "adts" or "midi". */
+  format: string | null;
+  /** False for a MIDI file with nothing rendered to play. */
+  playable: boolean;
 }
 
 export interface ClipDetail {
@@ -47,6 +51,8 @@ export interface ClipDetail {
   durationSeconds: number | null;
   /** True only for the uploader — you can delete your own clips. */
   canDelete: boolean;
+  format: string | null;
+  playable: boolean;
 }
 
 export interface WikiPage {

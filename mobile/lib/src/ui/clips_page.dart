@@ -8,6 +8,7 @@ import '../format.dart';
 import '../player/player_controller.dart';
 import 'account_page.dart';
 import 'app_scope.dart';
+import 'clip_format.dart';
 import 'clip_page.dart';
 import 'common.dart';
 import 'upload.dart';
@@ -364,36 +365,68 @@ class _ClipRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 IconButton(
-                  tooltip: isPlaying ? 'Pause' : 'Play',
-                  icon: Icon(isPlaying ? Icons.pause_circle : Icons.play_circle,
-                      size: 34),
+                  tooltip: !clip.playable
+                      ? unplayableMessage
+                      : isPlaying
+                      ? 'Pause'
+                      : 'Play',
+                  icon: Icon(
+                    isPlaying ? Icons.pause_circle : Icons.play_circle,
+                    size: 34,
+                  ),
                   color: isLoaded ? theme.colorScheme.primary : null,
-                  onPressed: onPlay ??
-                      () => player.play(
-                            clip,
-                            session.api.resolve(clip.audioPath),
-                            headers: session.api.authHeaders,
-                          ),
+                  onPressed: !clip.playable
+                      ? null
+                      : onPlay ??
+                            () => player.play(
+                              clip,
+                              session.api.resolve(clip.audioPath),
+                              headers: session.api.authHeaders,
+                            ),
                 ),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(
-                        clip.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.titleSmall,
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              clip.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.titleSmall,
+                            ),
+                          ),
+                          if (clip.isMidi) ...[
+                            const SizedBox(width: 6),
+                            FormatBadge(clip: clip),
+                          ],
+                        ],
                       ),
                       const SizedBox(height: 4),
-                      Waveform(
-                        peaks: clip.peaks,
-                        // Only the loaded clip shows a position; the
-                        // rest are pictures of a waveform.
-                        progress: isLoaded ? player.progress : 0,
-                        height: 30,
-                      ),
+                      if (clip.playable)
+                        Waveform(
+                          peaks: clip.peaks,
+                          // Only the loaded clip shows a position; the
+                          // rest are pictures of a waveform.
+                          progress: isLoaded ? player.progress : 0,
+                          height: 30,
+                        )
+                      else
+                        SizedBox(
+                          height: 30,
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              unplayableMessage,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.outline,
+                              ),
+                            ),
+                          ),
+                        ),
                       const SizedBox(height: 4),
                       Text(
                         _subtitle(),

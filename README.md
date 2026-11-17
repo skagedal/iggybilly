@@ -16,6 +16,10 @@ Android in [`mobile/`](mobile/), talking to the same server.
   container plays from an MP4 copy made at upload, which iPhones need;
   Download still gives back the file as uploaded. See
   [`specs/implemented/003-audio-formats.md`](specs/implemented/003-audio-formats.md).
+- MIDI files can be uploaded too, and are clips like any other:
+  labels, playlists, Download. They are marked MIDI and can't be played
+  yet. See
+  [`specs/implemented/004-midi-files.md`](specs/implemented/004-midi-files.md).
 - Each user can delete clips they uploaded (from the clip's own page);
   the row, its labels, and the audio file on disk all go with it. You
   can't delete someone else's clip.
@@ -44,6 +48,8 @@ Android in [`mobile/`](mobile/), talking to the same server.
   restore. Filtering by a label shows its page above the clips.
 - The phone app does all of the above, and adds a list of the devices
   you are signed in on, any of which you can sign out from any other.
+  In place of Download it has Share file, which hands the original
+  upload to the system share sheet.
 - The phone app also keeps clips on disk: played clips are cached up to a
   size you choose and evicted least-recently-played first, and any clip
   can be marked "keep downloaded" to stay put and play with no network.

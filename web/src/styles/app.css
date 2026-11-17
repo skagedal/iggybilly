@@ -230,6 +230,12 @@ button:disabled { opacity: 0.6; cursor: default; filter: none; }
 }
 .clip-card.dragging { opacity: 0.5; }
 .clip-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 1rem; }
+.format-badge {
+  font-size: 0.7rem; font-weight: 600; letter-spacing: 0.05em; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 4px; padding: 0 0.3rem;
+}
+.clip-header .format-badge { align-self: center; }
+.unplayable { flex: 1 1 auto; margin: 0; color: var(--muted); font-size: 0.9rem; }
 
 .mini-player {
   display: flex;

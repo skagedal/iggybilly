@@ -46,7 +46,10 @@ class RecoveringAudioEngine implements AudioEngine {
   bool _disposed = false;
 
   @override
-  Future<Duration?> load(Uri url, {Map<String, String> headers = const {}}) async {
+  Future<Duration?> load(
+    Uri url, {
+    Map<String, String> headers = const {},
+  }) async {
     try {
       return await _attached().load(url, headers: headers);
     } on PlayerInterruptedException {

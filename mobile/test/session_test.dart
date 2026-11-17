@@ -5,10 +5,7 @@ import 'package:iggybilly/src/auth/session.dart';
 
 import 'fakes.dart';
 
-Session sessionWith(
-  FakeHttpClient client, {
-  InMemoryCredentialStore? store,
-}) =>
+Session sessionWith(FakeHttpClient client, {InMemoryCredentialStore? store}) =>
     Session(
       store: store ?? InMemoryCredentialStore(),
       httpClient: client,
@@ -78,37 +75,50 @@ void main() {
     expect(session.api.token, 'new');
   });
 
-  test('a failed sign-in leaves the app signed out and stores nothing', () async {
-    final store = InMemoryCredentialStore();
-    final session = sessionWith(
-      FakeHttpClient((_) => fails(401, 'Invalid username or password.')),
-      store: store,
-    );
+  test(
+    'a failed sign-in leaves the app signed out and stores nothing',
+    () async {
+      final store = InMemoryCredentialStore();
+      final session = sessionWith(
+        FakeHttpClient((_) => fails(401, 'Invalid username or password.')),
+        store: store,
+      );
 
-    await expectLater(
-      session.signIn(
+      await expectLater(
+        session.signIn(
+          server: Uri.parse('https://band.test'),
+          username: 'alice',
+          password: 'wrong',
+        ),
+        throwsA(
+          isA<ApiException>().having(
+            (e) => e.message,
+            'message',
+            'Invalid username or password.',
+          ),
+        ),
+      );
+      expect(session.status, SessionStatus.restoring);
+      expect(store.token, isNull);
+    },
+  );
+
+  test(
+    'the device name reaches the server so the token is recognisable',
+    () async {
+      final fake = FakeHttpClient.json({
+        'token': 'new',
+        'tokenId': 1,
+        'user': userJson(),
+      });
+      await sessionWith(fake).signIn(
         server: Uri.parse('https://band.test'),
         username: 'alice',
-        password: 'wrong',
-      ),
-      throwsA(isA<ApiException>()
-          .having((e) => e.message, 'message', 'Invalid username or password.')),
-    );
-    expect(session.status, SessionStatus.restoring);
-    expect(store.token, isNull);
-  });
-
-  test('the device name reaches the server so the token is recognisable',
-      () async {
-    final fake = FakeHttpClient.json(
-        {'token': 'new', 'tokenId': 1, 'user': userJson()});
-    await sessionWith(fake).signIn(
-      server: Uri.parse('https://band.test'),
-      username: 'alice',
-      password: 'pw',
-    );
-    expect(fake.lastRequest.body, contains('Test phone'));
-  });
+        password: 'pw',
+      );
+      expect(fake.lastRequest.body, contains('Test phone'));
+    },
+  );
 
   test('signing out drops the credential even if the server refuses', () async {
     final store = storeWithToken('tok');
@@ -132,9 +142,11 @@ void main() {
   test('changing the password keeps the replacement token', () async {
     final store = storeWithToken('old');
     final session = sessionWith(
-      FakeHttpClient((request) => request.url.path == '/api/v1/me'
-          ? ok(userJson())
-          : ok({'token': 'replacement', 'tokenId': 9})),
+      FakeHttpClient(
+        (request) => request.url.path == '/api/v1/me'
+            ? ok(userJson())
+            : ok({'token': 'replacement', 'tokenId': 9}),
+      ),
       store: store,
     );
     await session.restore();
@@ -153,10 +165,7 @@ void main() {
 
   test('a 401 mid-session returns the app to the sign-in screen', () async {
     final store = storeWithToken('tok');
-    final session = sessionWith(
-      FakeHttpClient.json(userJson()),
-      store: store,
-    );
+    final session = sessionWith(FakeHttpClient.json(userJson()), store: store);
     await session.restore();
     expect(session.status, SessionStatus.signedIn);
 

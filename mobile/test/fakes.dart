@@ -23,19 +23,26 @@ class FakeHttpClient extends http.BaseClient {
 
   /// Convenience: answer every request with one JSON body and status.
   factory FakeHttpClient.json(Object? body, {int status = 200}) =>
-      FakeHttpClient((_) => http.Response(
-            jsonEncode(body),
-            status,
-            headers: {'content-type': 'application/json'},
-          ));
+      FakeHttpClient(
+        (_) => http.Response(
+          jsonEncode(body),
+          status,
+          headers: {'content-type': 'application/json'},
+        ),
+      );
 
   /// Answer by path, so one client can serve a whole flow. Paths are
   /// matched exactly, without the query string.
   factory FakeHttpClient.routes(Map<String, http.Response> routes) =>
-      FakeHttpClient((request) =>
-          routes[request.url.path] ??
-          http.Response('{"error":"no route for ${request.url.path}"}', 404,
-              headers: {'content-type': 'application/json'}));
+      FakeHttpClient(
+        (request) =>
+            routes[request.url.path] ??
+            http.Response(
+              '{"error":"no route for ${request.url.path}"}',
+              404,
+              headers: {'content-type': 'application/json'},
+            ),
+      );
 
   http.Request get lastRequest => requests.last;
 
@@ -64,16 +71,16 @@ class FakeHttpClient extends http.BaseClient {
 
 /// JSON with the right content type, for [FakeHttpClient.routes].
 http.Response ok(Object? body) => http.Response(
-      jsonEncode(body),
-      200,
-      headers: {'content-type': 'application/json'},
-    );
+  jsonEncode(body),
+  200,
+  headers: {'content-type': 'application/json'},
+);
 
 http.Response fails(int status, String error) => http.Response(
-      jsonEncode({'error': error}),
-      status,
-      headers: {'content-type': 'application/json'},
-    );
+  jsonEncode({'error': error}),
+  status,
+  headers: {'content-type': 'application/json'},
+);
 
 /// A clip as the server sends one, with the fields a test cares about
 /// overridable.
@@ -87,34 +94,31 @@ Map<String, dynamic> clipJson({
   double? durationSeconds,
   String uploadedAt = '2026-05-26T10:30:00.000Z',
   String? recordingDate,
-}) =>
-    {
-      'id': id,
-      'name': name,
-      'originalFilename': '$name.mp3',
-      'contentType': 'audio/mpeg',
-      'uploadedAt': uploadedAt,
-      'recordingDate': recordingDate,
-      'uploader': uploader,
-      'labels': labels,
-      'peaks': peaks,
-      'durationSeconds': durationSeconds,
-      'audioUrl': '/clips/$id/audio',
-      'downloadUrl': '/clips/$id/audio?download=1',
-      'canDelete': canDelete,
-    };
+}) => {
+  'id': id,
+  'name': name,
+  'originalFilename': '$name.mp3',
+  'contentType': 'audio/mpeg',
+  'uploadedAt': uploadedAt,
+  'recordingDate': recordingDate,
+  'uploader': uploader,
+  'labels': labels,
+  'peaks': peaks,
+  'durationSeconds': durationSeconds,
+  'audioUrl': '/clips/$id/audio',
+  'downloadUrl': '/clips/$id/audio?download=1',
+  'canDelete': canDelete,
+};
 
 Map<String, dynamic> userJson({
   int id = 1,
   String username = 'alice',
   bool isAdmin = false,
-}) =>
-    {'id': id, 'username': username, 'isAdmin': isAdmin};
+}) => {'id': id, 'username': username, 'isAdmin': isAdmin};
 
 /// A credential store that starts out signed in.
-InMemoryCredentialStore storeWithToken(String token) =>
-    InMemoryCredentialStore(
-      token: token,
-      serverUrl: 'https://example.test',
-      username: 'alice',
-    );
+InMemoryCredentialStore storeWithToken(String token) => InMemoryCredentialStore(
+  token: token,
+  serverUrl: 'https://example.test',
+  username: 'alice',
+);

@@ -15,10 +15,7 @@ void main() {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(
     IggybillyApp(
-      session: Session(
-        store: SecureCredentialStore(),
-        deviceName: deviceName,
-      ),
+      session: Session(store: SecureCredentialStore(), deviceName: deviceName),
       // The directory arrives as a function rather than a path, because
       // asking the platform for it is asynchronous and the first frame
       // should not wait on a disk cache.

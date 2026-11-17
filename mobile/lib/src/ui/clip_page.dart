@@ -67,7 +67,10 @@ class _ClipPageState extends State<ClipPage> {
     );
     if (name == null || name == clip.name || !mounted) return;
 
-    final settled = await guard(context, () => sessionOf(context).api.renameClip(clip.id, name));
+    final settled = await guard(
+      context,
+      () => sessionOf(context).api.renameClip(clip.id, name),
+    );
     if (settled == null || !mounted) return;
 
     setState(() {
@@ -144,14 +147,18 @@ class _ClipPageState extends State<ClipPage> {
     final sure = await confirm(
       context,
       title: 'Delete “${clip.name}”?',
-      message: 'The clip and its audio file are removed for everyone. '
+      message:
+          'The clip and its audio file are removed for everyone. '
           'This cannot be undone.',
       confirmLabel: 'Delete',
     );
     if (!sure || !mounted) return;
 
     final player = AppScope.of(context).player;
-    final done = await guardDone(context, () => sessionOf(context).api.deleteClip(clip.id));
+    final done = await guardDone(
+      context,
+      () => sessionOf(context).api.deleteClip(clip.id),
+    );
     if (!done) return;
 
     // Stop first: a bar playing a clip that no longer exists is a
@@ -312,8 +319,9 @@ class _ClipPageState extends State<ClipPage> {
             Text(
               renderingNote,
               textAlign: TextAlign.center,
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: theme.colorScheme.outline),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
             ),
           ],
           if (clip.playable) ...[
@@ -339,8 +347,9 @@ class _ClipPageState extends State<ClipPage> {
               padding: const EdgeInsets.symmetric(vertical: 8),
               child: Text(
                 'No labels yet. Labels are how you find this again.',
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: theme.colorScheme.outline),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.outline,
+                ),
               ),
             )
           else
@@ -393,8 +402,9 @@ class _Facts extends StatelessWidget {
                   width: 110,
                   child: Text(
                     label,
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: theme.colorScheme.outline),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.outline,
+                    ),
                   ),
                 ),
                 Expanded(child: Text(value, style: theme.textTheme.bodyMedium)),
@@ -432,19 +442,19 @@ class _RenameDialogState extends State<_RenameDialog> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-        title: const Text('Rename clip'),
-        content: TextField(
-          controller: _controller,
-          autofocus: true,
-          decoration: const InputDecoration(labelText: 'Name'),
-          onSubmitted: (_) => _submit(),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          TextButton(onPressed: _submit, child: const Text('Rename')),
-        ],
-      );
+    title: const Text('Rename clip'),
+    content: TextField(
+      controller: _controller,
+      autofocus: true,
+      decoration: const InputDecoration(labelText: 'Name'),
+      onSubmitted: (_) => _submit(),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(),
+        child: const Text('Cancel'),
+      ),
+      TextButton(onPressed: _submit, child: const Text('Rename')),
+    ],
+  );
 }

@@ -9,11 +9,13 @@ void showMessage(BuildContext context, String message, {bool isError = false}) {
   final theme = Theme.of(context);
   ScaffoldMessenger.of(context)
     ..clearSnackBars()
-    ..showSnackBar(SnackBar(
-      content: Text(message),
-      backgroundColor: isError ? theme.colorScheme.errorContainer : null,
-      showCloseIcon: isError,
-    ));
+    ..showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? theme.colorScheme.errorContainer : null,
+        showCloseIcon: isError,
+      ),
+    );
 }
 
 /// Run an API call, turning its failures into something the user sees.
@@ -82,21 +84,27 @@ class ErrorBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.cloud_off,
-                  size: 40, color: Theme.of(context).colorScheme.outline),
-              const SizedBox(height: 12),
-              Text(message, textAlign: TextAlign.center),
-              const SizedBox(height: 16),
-              FilledButton.tonal(onPressed: onRetry, child: const Text('Try again')),
-            ],
+    child: Padding(
+      padding: const EdgeInsets.all(32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.cloud_off,
+            size: 40,
+            color: Theme.of(context).colorScheme.outline,
           ),
-        ),
-      );
+          const SizedBox(height: 12),
+          Text(message, textAlign: TextAlign.center),
+          const SizedBox(height: 16),
+          FilledButton.tonal(
+            onPressed: onRetry,
+            child: const Text('Try again'),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 /// A screen with nothing on it yet, and a line saying why that is fine.
@@ -108,22 +116,22 @@ class EmptyBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 40, color: Theme.of(context).colorScheme.outline),
-              const SizedBox(height: 12),
-              Text(
-                message,
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-            ],
+    child: Padding(
+      padding: const EdgeInsets.all(32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 40, color: Theme.of(context).colorScheme.outline),
+          const SizedBox(height: 12),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodyMedium,
           ),
-        ),
-      );
+        ],
+      ),
+    ),
+  );
 }
 
 /// Ask before doing something that cannot be undone.
@@ -148,7 +156,8 @@ Future<bool> confirm(
           onPressed: () => Navigator.of(context).pop(true),
           style: destructive
               ? TextButton.styleFrom(
-                  foregroundColor: Theme.of(context).colorScheme.error)
+                  foregroundColor: Theme.of(context).colorScheme.error,
+                )
               : null,
           child: Text(confirmLabel),
         ),

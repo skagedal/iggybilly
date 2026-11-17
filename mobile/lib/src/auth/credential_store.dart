@@ -33,17 +33,18 @@ abstract class CredentialStore {
 /// storage are what that costs.
 class SecureCredentialStore implements CredentialStore {
   SecureCredentialStore({FlutterSecureStorage? secure})
-      : _secure = secure ??
-            const FlutterSecureStorage(
-              // Android needs no options here: the plugin encrypts with
-              // its own ciphers by default now.
-              iOptions: IOSOptions(
-                // Readable only once the device has been unlocked at
-                // least once since boot, and never restored onto a
-                // different phone from a backup.
-                accessibility: KeychainAccessibility.first_unlock_this_device,
-              ),
-            );
+    : _secure =
+          secure ??
+          const FlutterSecureStorage(
+            // Android needs no options here: the plugin encrypts with
+            // its own ciphers by default now.
+            iOptions: IOSOptions(
+              // Readable only once the device has been unlocked at
+              // least once since boot, and never restored onto a
+              // different phone from a backup.
+              accessibility: KeychainAccessibility.first_unlock_this_device,
+            ),
+          );
 
   static const _tokenKey = 'iggybilly.token';
   static const _serverKey = 'iggybilly.server';

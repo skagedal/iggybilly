@@ -42,10 +42,10 @@ void main() {
     // Uri.replace(queryParameters:) cannot express a repeated key, which
     // is exactly what the AND filter needs.
     expect(fake.lastRequest.url.query, 'label=verse&label=live+take');
-    expect(
-      fake.lastRequest.url.queryParametersAll['label'],
-      ['verse', 'live take'],
-    );
+    expect(fake.lastRequest.url.queryParametersAll['label'], [
+      'verse',
+      'live take',
+    ]);
   });
 
   test('a playlist arrives in order, with its length', () async {
@@ -62,21 +62,28 @@ void main() {
     expect(playlist.total, const Duration(milliseconds: 90500));
   });
 
-  test('a reorder names the neighbour, and a move to the front names none',
-      () async {
-    final fake = FakeHttpClient.json({
-      'order': [2, 1]
-    });
-    final order = await apiWith(fake).reorderPlaylist(4, 2, null);
+  test(
+    'a reorder names the neighbour, and a move to the front names none',
+    () async {
+      final fake = FakeHttpClient.json({
+        'order': [2, 1],
+      });
+      final order = await apiWith(fake).reorderPlaylist(4, 2, null);
 
-    expect(fake.lastRequest.method, 'POST');
-    expect(fake.lastRequest.url.path, '/api/v1/labels/4/order');
-    expect(jsonDecode(fake.lastRequest.body), {'clipId': 2, 'afterClipId': null});
-    expect(order, [2, 1]);
-  });
+      expect(fake.lastRequest.method, 'POST');
+      expect(fake.lastRequest.url.path, '/api/v1/labels/4/order');
+      expect(jsonDecode(fake.lastRequest.body), {
+        'clipId': 2,
+        'afterClipId': null,
+      });
+      expect(order, [2, 1]);
+    },
+  );
 
   test('a clip without peaks is parsed, not rejected', () async {
-    final fake = FakeHttpClient.json(clipJson(peaks: null, durationSeconds: null));
+    final fake = FakeHttpClient.json(
+      clipJson(peaks: null, durationSeconds: null),
+    );
     final clip = await apiWith(fake).clip(1);
     expect(clip.peaks, isNull);
     expect(clip.duration, isNull);
@@ -95,19 +102,24 @@ void main() {
     );
     final clip = await apiWith(fake).clip(1);
     expect(clip.uploadedAt.isUtc, isFalse, reason: 'converted for the device');
-    expect(
-      clip.uploadedAt.toUtc(),
-      DateTime.utc(2026, 5, 26, 10, 30),
-    );
+    expect(clip.uploadedAt.toUtc(), DateTime.utc(2026, 5, 26, 10, 30));
   });
 
   test("the server's own error wording reaches the user", () async {
-    final fake = FakeHttpClient((_) => fails(409, 'A clip named “riff” already exists.'));
+    final fake = FakeHttpClient(
+      (_) => fails(409, 'A clip named “riff” already exists.'),
+    );
     await expectLater(
       apiWith(fake).renameClip(2, 'riff'),
-      throwsA(isA<ApiException>()
-          .having((e) => e.message, 'message', 'A clip named “riff” already exists.')
-          .having((e) => e.isConflict, 'isConflict', isTrue)),
+      throwsA(
+        isA<ApiException>()
+            .having(
+              (e) => e.message,
+              'message',
+              'A clip named “riff” already exists.',
+            )
+            .having((e) => e.isConflict, 'isConflict', isTrue),
+      ),
     );
   });
 
@@ -115,31 +127,52 @@ void main() {
     final fake = FakeHttpClient((_) => fails(401, 'invalid or revoked token'));
     await expectLater(
       apiWith(fake).me(),
-      throwsA(isA<ApiException>().having((e) => e.isUnauthorized, 'isUnauthorized', isTrue)),
+      throwsA(
+        isA<ApiException>().having(
+          (e) => e.isUnauthorized,
+          'isUnauthorized',
+          isTrue,
+        ),
+      ),
     );
   });
 
   test('a page that is not JSON is reported as a wrong address', () async {
-    final fake = FakeHttpClient((_) => http.Response('<html>hello</html>', 200));
+    final fake = FakeHttpClient(
+      (_) => http.Response('<html>hello</html>', 200),
+    );
     await expectLater(
       apiWith(fake).me(),
-      throwsA(isA<ApiException>().having(
-        (e) => e.message,
-        'message',
-        contains('did not answer like an iggybilly server'),
-      )),
+      throwsA(
+        isA<ApiException>().having(
+          (e) => e.message,
+          'message',
+          contains('did not answer like an iggybilly server'),
+        ),
+      ),
     );
   });
 
-  test('an unreachable server names the address rather than the socket', () async {
-    final fake = FakeHttpClient((_) => throw http.ClientException('failed host lookup'));
-    await expectLater(
-      apiWith(fake).me(),
-      throwsA(isA<ApiException>()
-          .having((e) => e.message, 'message', contains('https://example.test'))
-          .having((e) => e.statusCode, 'statusCode', isNull)),
-    );
-  });
+  test(
+    'an unreachable server names the address rather than the socket',
+    () async {
+      final fake = FakeHttpClient(
+        (_) => throw http.ClientException('failed host lookup'),
+      );
+      await expectLater(
+        apiWith(fake).me(),
+        throwsA(
+          isA<ApiException>()
+              .having(
+                (e) => e.message,
+                'message',
+                contains('https://example.test'),
+              )
+              .having((e) => e.statusCode, 'statusCode', isNull),
+        ),
+      );
+    },
+  );
 
   test('a 204 is a success with no body to parse', () async {
     final fake = FakeHttpClient((_) => http.Response('', 204));
@@ -185,9 +218,13 @@ void main() {
   });
 
   test('the player is given headers it can attach itself', () {
-    expect(apiWith(FakeHttpClient.json(null)).authHeaders,
-        {'Authorization': 'Bearer tok'});
-    expect(apiWith(FakeHttpClient.json(null), token: null).authHeaders, isEmpty);
+    expect(apiWith(FakeHttpClient.json(null)).authHeaders, {
+      'Authorization': 'Bearer tok',
+    });
+    expect(
+      apiWith(FakeHttpClient.json(null), token: null).authHeaders,
+      isEmpty,
+    );
   });
 
   test('a label list replaces rather than merges', () async {

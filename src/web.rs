@@ -25,6 +25,7 @@ use crate::{
     discord::Discord,
     error::AppError,
     handlers::{account, auth as auth_handlers, clips, labels},
+    midi_render::Renderer,
     models::SessionUser,
 };
 
@@ -51,6 +52,21 @@ pub struct AppState {
     pub discord: Discord,
     /// Maps frontend entry names to their content-hashed URLs.
     pub assets: Arc<Assets>,
+    /// Renders MIDI uploads to audio. None without a SoundFont.
+    pub renderer: Option<Arc<Renderer>>,
+}
+
+/// Load the configured SoundFont. A SoundFont that is configured but
+/// can't be loaded stops the server, rather than quietly leaving every
+/// MIDI clip unplayable.
+pub fn load_renderer(config: &Config) -> Result<Option<Arc<Renderer>>> {
+    let Some(path) = &config.soundfont else {
+        tracing::warn!("IGGYBILLY_SOUNDFONT is not set: MIDI clips won't be playable");
+        return Ok(None);
+    };
+    let renderer = Renderer::load(path)?;
+    tracing::info!(soundfont = %path.display(), version = renderer.version(), "loaded SoundFont");
+    Ok(Some(Arc::new(renderer)))
 }
 
 pub async fn serve(config: Config, pool: SqlitePool) -> Result<()> {
@@ -70,21 +86,25 @@ pub async fn serve(config: Config, pool: SqlitePool) -> Result<()> {
         );
     }
 
+    let renderer = load_renderer(&config)?;
+
     // Detect formats and make playback copies for clips stored before
-    // either existed. In the background: the server is usable meanwhile,
-    // those clips just play as they always did until it gets to them.
+    // either existed, or rendered by another version. In the background:
+    // the server is usable meanwhile, those clips just play as they did
+    // until it gets to them.
     {
         let pool = pool.clone();
         let audio_dir = config.audio_dir.clone();
+        let renderer = renderer.clone();
         tokio::spawn(async move {
-            if let Err(e) = crate::playback::backfill(&pool, &audio_dir).await {
+            if let Err(e) = crate::playback::backfill(&pool, &audio_dir, renderer).await {
                 tracing::error!(error = ?e, "playback backfill failed");
             }
         });
     }
 
     let listen = config.listen_addr.clone();
-    let app = build_app(pool, Arc::new(config)).await?;
+    let app = build_app_with(pool, Arc::new(config), renderer).await?;
     let listener = TcpListener::bind(&listen).await?;
     tracing::info!("listening on {listen}");
     axum::serve(listener, app).await?;
@@ -96,6 +116,17 @@ pub async fn serve(config: Config, pool: SqlitePool) -> Result<()> {
 /// a random-port `TcpListener` without going through the CLI/config
 /// env-var path.
 pub async fn build_app(pool: SqlitePool, config: Arc<Config>) -> Result<Router> {
+    let renderer = load_renderer(&config)?;
+    build_app_with(pool, config, renderer).await
+}
+
+/// [`build_app`] with the SoundFont already loaded, so `serve` can share
+/// it with the startup backfill instead of loading it twice.
+pub async fn build_app_with(
+    pool: SqlitePool,
+    config: Arc<Config>,
+    renderer: Option<Arc<Renderer>>,
+) -> Result<Router> {
     let session_store = SqliteStore::new(pool.clone());
     session_store.migrate().await?;
 
@@ -124,6 +155,7 @@ pub async fn build_app(pool: SqlitePool, config: Arc<Config>) -> Result<Router> 
         assets: Arc::new(Assets::load(&static_dir)),
         config,
         discord,
+        renderer,
     };
 
     // Two kinds of route. The handful under no prefix are pages: real

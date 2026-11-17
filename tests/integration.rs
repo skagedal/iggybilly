@@ -51,6 +51,7 @@ async fn start_with(discord_webhook_url: Option<String>, base_url: Option<String
         secure_cookies: false,
         discord_webhook_url,
         base_url,
+        soundfont: None,
     };
 
     let pool = iggybilly::db::connect(&db_path).await.unwrap();

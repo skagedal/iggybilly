@@ -6,14 +6,16 @@ import 'package:flutter/material.dart';
 import '../api/client.dart';
 import 'common.dart';
 
-/// Extensions the server accepts. Offered to the picker so a file that
-/// would be refused cannot be chosen in the first place — a rejection
-/// after a slow upload is a bad way to learn the rule.
+/// Extensions of the formats the server accepts. Offered to the picker
+/// so a file that would be refused cannot be chosen in the first place —
+/// a rejection after a slow upload is a bad way to learn the rule.
 const _audioExtensions = [
   'mp3',
   'm4a',
   'mp4',
   'aac',
+  'mid',
+  'midi',
 ];
 
 /// What the server will take for one clip. Checked here as well so an

@@ -2,6 +2,8 @@
 
 Implements [#49](https://github.com/skagedal/iggybilly/issues/49).
 
+> Complemented by [004-midi-files](004-midi-files.md).
+
 A clip is only worth uploading if everyone in the band can play it, on
 whatever they happen to be holding. Today that is luck. The server
 decides what a file is from its name, stores the bytes as they came, and

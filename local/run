@@ -56,5 +56,16 @@ if [ ! -f "$manifest" ] || [ -n "$(newer-than "$manifest" "$web/src" "$web/build
     (cd "$web" && pnpm run build:dev)
 fi
 
+# MIDI clips are rendered with a SoundFont that isn't in the repository.
+# Fetch the same one the image has, once, unless one is set already.
+if [ -z "${IGGYBILLY_SOUNDFONT:-}" ]; then
+    soundfont="$root/local/soundfont/GeneralUser-GS.sf2"
+    if [ ! -f "$soundfont" ]; then
+        echo "local/run: fetching the SoundFont for MIDI clips (about 30 MB)" >&2
+        "$root/ci/fetch-soundfont" "$soundfont"
+    fi
+    export IGGYBILLY_SOUNDFONT="$soundfont"
+fi
+
 cd "$root"
 exec cargo run -- "$@"

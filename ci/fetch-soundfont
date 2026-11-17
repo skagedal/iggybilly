@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#
+# Download the SoundFont that MIDI files are rendered with.
+#
+#   ./ci/fetch-soundfont <destination.sf2>
+#
+# GeneralUser GS by S. Christian Collins, a General MIDI bank of about
+# 30 MB whose licence allows use in software. It is fetched rather than
+# committed, from a pinned commit of the author's repository, and checked
+# against its checksum, so the image always renders with the same
+# instruments. Used by main.Dockerfile, and by local/run when the copy for
+# local development is missing.
+#
+# Changing the pin changes the instruments: the server notices the new
+# file and renders every MIDI clip again on its next start.
+
+set -euo pipefail
+
+commit=97049183643d5fc5a9322a69c5b09efb667c6c3a # v2.0.3
+sha256=9575028c7a1f589f5770fccc8cff2734566af40cd26ed836944e9a5152688cfe
+url="https://raw.githubusercontent.com/mrbumpy409/GeneralUser-GS/$commit/GeneralUser-GS.sf2"
+
+[ $# -eq 1 ] || { echo "usage: $0 <destination.sf2>" >&2; exit 2; }
+dest="$1"
+tmp="$dest.download"
+trap 'rm -f "$tmp"' EXIT
+
+mkdir -p "$(dirname "$dest")"
+curl --fail --silent --show-error --location --output "$tmp" "$url"
+
+if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "$tmp" | cut -d' ' -f1)"
+else
+    actual="$(shasum -a 256 "$tmp" | cut -d' ' -f1)"
+fi
+if [ "$actual" != "$sha256" ]; then
+    echo "fetch-soundfont: checksum mismatch for $url" >&2
+    echo "  expected $sha256" >&2
+    echo "  got      $actual" >&2
+    exit 1
+fi
+mv "$tmp" "$dest"

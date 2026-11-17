@@ -146,6 +146,7 @@ class PlayerController extends ChangeNotifier {
   /// the loaded one, toggle it, so pressing play twice does not lose your
   /// place.
   Future<void> play(Clip clip, Uri url, {Map<String, String> headers = const {}}) async {
+    if (!clip.playable) return;
     if (_clip?.id == clip.id) {
       await toggle();
       return;
@@ -167,10 +168,11 @@ class PlayerController extends ChangeNotifier {
     required Uri Function(Clip clip) urlFor,
     Map<String, String> headers = const {},
   }) async {
-    final target = clips.where((c) => c.id == clipId).firstOrNull;
+    final playable = clips.where((c) => c.playable).toList();
+    final target = playable.where((c) => c.id == clipId).firstOrNull;
     if (target == null) return;
     _source = source;
-    _tracks = List.unmodifiable(clips);
+    _tracks = List.unmodifiable(playable);
     _resumeAt = null;
     _urlFor = urlFor;
     _headers = headers;
@@ -186,10 +188,11 @@ class PlayerController extends ChangeNotifier {
   /// Replace what is queued without touching what is playing — if the
   /// queue is the playlist of [source], and otherwise nothing. How a
   /// reorder, or a label going on or coming off, reaches the queue.
-  Future<void> setQueueTracks(String source, List<Clip> clips) async {
+  Future<void> setQueueTracks(String source, List<Clip> all) async {
     if (_source == null || _source!.toLowerCase() != source.toLowerCase()) {
       return;
     }
+    final clips = all.where((c) => c.playable).toList();
     final current = _clip?.id;
     final kept = {for (final c in clips) c.id};
     final index = queueIndex;

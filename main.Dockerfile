@@ -1,6 +1,7 @@
-# Three-stage build: bundle the frontend, compile a release binary, then
-# copy both into a slim Debian image with just the SQLite + TLS runtime
-# libs we link against.
+# Four-stage build: bundle the frontend, compile a release binary, fetch
+# the SoundFont MIDI clips are rendered with, then copy all three into a
+# slim Debian image with just the SQLite + TLS runtime libs we link
+# against.
 
 # UPGRADE_POINT
 FROM node:24-bookworm-slim AS frontend
@@ -29,7 +30,8 @@ WORKDIR /build
 
 # Install only the system deps we need to link (sqlx links libsqlite3
 # dynamically only if we enable the bundled feature; we don't here, so
-# pull in the headers). Build-essential is the rust toolchain's gcc.
+# pull in the headers). The image's own gcc also compiles LAME, which
+# mp3lame-sys builds from source.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config libsqlite3-dev ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -50,6 +52,16 @@ COPY templates ./templates
 RUN cargo build --locked --release
 
 # UPGRADE_POINT
+FROM debian:bookworm-slim AS soundfont
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+# The URL and checksum live in the script, which local/run uses too.
+COPY ci/fetch-soundfont /fetch-soundfont
+RUN /fetch-soundfont /GeneralUser-GS.sf2
+
+# UPGRADE_POINT
 FROM debian:bookworm-slim AS app
 
 WORKDIR /app
@@ -62,9 +74,11 @@ COPY --from=build /build/target/release/iggybilly /app/iggybilly
 # Bundles + manifest.json, served at /static. The binary reads
 # static/dist/manifest.json at startup, relative to this WORKDIR.
 COPY --from=frontend /static ./static
+COPY --from=soundfont /GeneralUser-GS.sf2 /usr/share/iggybilly/GeneralUser-GS.sf2
 
 ENV IGGYBILLY_DATA_DIR=/var/lib/iggybilly
 ENV IGGYBILLY_LISTEN_ADDR=0.0.0.0:9020
+ENV IGGYBILLY_SOUNDFONT=/usr/share/iggybilly/GeneralUser-GS.sf2
 EXPOSE 9020
 
 ENTRYPOINT ["/app/iggybilly"]

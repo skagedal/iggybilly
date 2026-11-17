@@ -24,6 +24,9 @@ pub struct Config {
     /// turn clips and labels into clickable links in Discord posts. When
     /// `None`, posts carry plain names instead of links.
     pub base_url: Option<String>,
+    /// The SoundFont MIDI clips are rendered with. When `None`, MIDI
+    /// clips are stored without a playback copy and can't be played.
+    pub soundfont: Option<PathBuf>,
 }
 
 impl Config {
@@ -46,6 +49,7 @@ impl Config {
         // risking a double slash.
         let base_url =
             non_empty_env("IGGYBILLY_BASE_URL").map(|u| u.trim_end_matches('/').to_string());
+        let soundfont = non_empty_env("IGGYBILLY_SOUNDFONT").map(PathBuf::from);
         Self {
             listen_addr,
             data_dir,
@@ -55,6 +59,7 @@ impl Config {
             secure_cookies,
             discord_webhook_url,
             base_url,
+            soundfont,
         }
     }
 }

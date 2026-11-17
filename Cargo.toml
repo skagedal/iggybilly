@@ -75,10 +75,32 @@ comrak = { version = "0.52", default-features = false }
 # mvhd header (see handlers/clips.rs).
 symphonia = { version = "0.6", features = ["mp3", "aac", "isomp4", "alac"] }
 
+# Reading Standard MIDI Files, to accept or refuse a MIDI upload.
+# Lenient (no "strict" feature), because exported files often have small
+# irregularities that every player shrugs off. "parallel" would pull in
+# rayon for files that are a few hundred kilobytes.
+midly = { version = "0.5", default-features = false, features = ["std"] }
+# Rendering MIDI clips to audio, in process like the rest of the audio
+# work: rustysynth plays the sequence through a SoundFont (pure Rust),
+# and LAME encodes the result as MP3. mp3lame-sys compiles LAME from
+# source, so this needs a C compiler at build time and nothing at run
+# time.
+rustysynth = "1.3"
+mp3lame-encoder = "0.3"
+
 [profile.release]
 strip = true
 lto = "thin"
 codegen-units = 1
+
+# Rendering is hot loops over samples, and unoptimised it is slow enough
+# to make an upload on `./local/run` wait. Optimise these two even in
+# debug builds; the rest of the crate keeps its fast compiles.
+[profile.dev.package.rustysynth]
+opt-level = 3
+
+[profile.dev.package.mp3lame-sys]
+opt-level = 3
 
 [dev-dependencies]
 # Real HTTP client with a cookie store so tests can drive the running

@@ -57,7 +57,7 @@ class Playlist {
   final List<Clip> clips;
 }
 
-/// One audio clip.
+/// One clip: a recording, or a MIDI file.
 class Clip {
   const Clip({
     required this.id,
@@ -73,6 +73,8 @@ class Clip {
     required this.audioPath,
     required this.downloadPath,
     required this.canDelete,
+    required this.format,
+    required this.playable,
   });
 
   factory Clip.fromJson(Map<String, dynamic> json) {
@@ -100,6 +102,9 @@ class Clip {
       audioPath: json['audioUrl'] as String,
       downloadPath: json['downloadUrl'] as String? ?? json['audioUrl'] as String,
       canDelete: json['canDelete'] as bool? ?? false,
+      format: json['format'] as String?,
+      // A server from before MIDI files only sends audio.
+      playable: json['playable'] as bool? ?? true,
     );
   }
 
@@ -136,6 +141,16 @@ class Clip {
   /// decides; the app only hides the button.
   final bool canDelete;
 
+  /// As the server detected it from the bytes: "mp4-aac", "mp3", "adts"
+  /// or "midi". Null for a clip the server hasn't looked at yet.
+  final String? format;
+
+  /// False when there is nothing to play: a MIDI file the server hasn't
+  /// rendered. Such a clip is never queued.
+  final bool playable;
+
+  bool get isMidi => format == 'midi';
+
   Clip withLabels(List<Label> replacement) => Clip(
         id: id,
         name: name,
@@ -150,6 +165,8 @@ class Clip {
         audioPath: audioPath,
         downloadPath: downloadPath,
         canDelete: canDelete,
+        format: format,
+        playable: playable,
       );
 
   Clip withName(String replacement) => Clip(
@@ -166,6 +183,8 @@ class Clip {
         audioPath: audioPath,
         downloadPath: downloadPath,
         canDelete: canDelete,
+        format: format,
+        playable: playable,
       );
 }
 

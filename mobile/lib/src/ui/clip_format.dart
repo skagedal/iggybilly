@@ -2,8 +2,14 @@ import 'package:flutter/material.dart';
 
 import '../api/models.dart';
 
-/// Shown where the player would be, for a clip with nothing to play.
-const unplayableMessage = 'Playback for MIDI files is coming.';
+/// Shown where the player would be, for a clip with nothing to play: a
+/// MIDI file with no notes, or one the server couldn't render.
+const unplayableMessage = "This MIDI file can't be played here.";
+
+/// Under a MIDI clip's player, since it isn't what the file's author
+/// heard.
+const renderingNote = 'Played with a general-purpose instrument set. '
+    'It will sound different in your own setup.';
 
 /// Marks a clip that isn't a recording, so nobody presses play expecting
 /// one. Nothing for a recording.

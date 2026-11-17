@@ -17,8 +17,9 @@ Android in [`mobile/`](mobile/), talking to the same server.
   Download still gives back the file as uploaded. See
   [`specs/implemented/003-audio-formats.md`](specs/implemented/003-audio-formats.md).
 - MIDI files can be uploaded too, and are clips like any other:
-  labels, playlists, Download. They are marked MIDI and can't be played
-  yet. See
+  labels, playlists, Download. They are marked MIDI, and play from an
+  MP3 the server renders at upload with a General MIDI SoundFont.
+  Download gives back the MIDI file. See
   [`specs/implemented/004-midi-files.md`](specs/implemented/004-midi-files.md).
 - Each user can delete clips they uploaded (from the clip's own page);
   the row, its labels, and the audio file on disk all go with it. You
@@ -214,6 +215,12 @@ Environment:
   uploaded or a label's wiki page is edited. Unset (the default) disables
   the notifications entirely. Posts are fire-and-forget: a Discord outage
   never blocks or fails an upload or edit, it's just logged.
+- `IGGYBILLY_SOUNDFONT` — the SoundFont MIDI clips are rendered with.
+  The image sets it to the GeneralUser GS copy it carries, and
+  `./local/run` fetches the same file into `local/soundfont/` and sets it
+  there. Unset, MIDI clips are stored but can't be played; set to a file
+  that won't load, the server refuses to start. Pointing it at a
+  different SoundFont re-renders every MIDI clip on the next start.
 - `IGGYBILLY_BASE_URL` — the public origin the app is served from, e.g.
   `https://iggybilly.skagedal.tech`. Used only to turn clips and labels
   into clickable links in the Discord posts; without it the posts carry

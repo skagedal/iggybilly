@@ -48,6 +48,8 @@ pub struct Clip {
     /// Whether there is anything for a media player to play: false only
     /// for a MIDI file with no rendered copy.
     pub playable: bool,
+    /// Whether `playback_filename` is a copy rather than the upload.
+    pub has_playback_copy: bool,
 }
 
 /// What `format` says about a stored clip with or without a playback
@@ -116,6 +118,7 @@ fn row_to_clip(row: ClipRow, labels: Vec<Label>) -> Clip {
         playback_content_type,
         playable: is_playable(format.as_deref(), has_playback_copy),
         format,
+        has_playback_copy,
     }
 }
 

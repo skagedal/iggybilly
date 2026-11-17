@@ -1,7 +1,11 @@
 import { useState } from "react";
 
 import { ApiError, api } from "../api";
-import { FormatBadge, Unplayable } from "../components/ClipFormat";
+import {
+  FormatBadge,
+  RenderingNote,
+  Unplayable,
+} from "../components/ClipFormat";
 import { LabelInput } from "../components/LabelInput";
 import { Layout } from "../components/Layout";
 import { Waveform } from "../components/Waveform";
@@ -210,6 +214,7 @@ function Player({ clip }: { clip: ClipDetail }) {
           Download
         </a>
       </div>
+      <RenderingNote format={clip.format} />
     </>
   );
 }

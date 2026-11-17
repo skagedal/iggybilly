@@ -17,3 +17,6 @@
 
 # The App Store Connect API key, likewise. See local/appstore.env.example.
 /local/appstore.env
+
+# The SoundFont MIDI clips are rendered with; local/run fetches it.
+/local/soundfont

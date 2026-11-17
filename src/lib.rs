@@ -16,6 +16,7 @@ pub mod discord;
 pub mod error;
 pub mod handlers;
 pub mod markdown;
+pub mod midi_render;
 pub mod models;
 pub mod playback;
 pub mod queries;

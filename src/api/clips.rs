@@ -65,13 +65,28 @@ pub struct Clip {
     playable: bool,
 }
 
+/// The `v` in a clip's audio URL, which names the file it streams. A
+/// playback copy's name begins with the same stem as its upload, so a
+/// copy gets a hash of its whole name instead: gaining a copy, or a new
+/// rendering of one, then changes the URL.
+fn audio_version(c: &queries::clips::Clip) -> String {
+    if c.has_playback_copy {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(c.playback_filename.as_bytes())[..4]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    } else {
+        c.playback_filename
+            .get(..8)
+            .unwrap_or(&c.playback_filename)
+            .to_owned()
+    }
+}
+
 pub(super) fn clip(c: queries::clips::Clip, viewer_id: i64) -> Clip {
     Clip {
-        audio_url: format!(
-            "/clips/{}/audio?v={}",
-            c.id,
-            c.playback_filename.get(..8).unwrap_or(&c.playback_filename)
-        ),
+        audio_url: format!("/clips/{}/audio?v={}", c.id, audio_version(&c)),
         download_url: format!("/clips/{}/audio?download=1", c.id),
         can_delete: c.uploaded_by == viewer_id,
         id: c.id,

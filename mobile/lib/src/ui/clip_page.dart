@@ -307,6 +307,15 @@ class _ClipPageState extends State<ClipPage> {
                 );
               },
             ),
+          if (clip.playable && clip.isMidi) ...[
+            const SizedBox(height: 8),
+            Text(
+              renderingNote,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.outline),
+            ),
+          ],
           if (clip.playable) ...[
             const SizedBox(height: 16),
             KeepDownloadedTile(clip: clip),

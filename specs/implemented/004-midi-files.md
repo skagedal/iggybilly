@@ -4,10 +4,8 @@ Implements [#55](https://github.com/skagedal/iggybilly/issues/55), requested by 
 Complements [003-audio-formats](003-audio-formats.md), whose playback
 copy this reuses.
 
-> **Only part 1 is built.** This spec moved here when MIDI files could
-> be uploaded, downloaded, shared and labelled, but not yet played. What
-> it says about part 2, rendering them to audio, is still the plan as
-> written, not a record of what was built.
+> Part 1 and part 2 shipped separately, on the same day. The spec moved
+> here with part 1, and was brought in line with part 2 when it shipped.
 
 Some of what the band shares isn't a recording. A drum pattern
 programmed in a DAW, a bass line someone sketched, an arrangement
@@ -99,7 +97,7 @@ gives, even for a clip that is kept downloaded.
 Exactly as for audio clips, on both clients. A MIDI clip can be dragged
 anywhere in a playlist.
 
-### Playing (part 2)
+### Playing
 
 A MIDI file plays like any clip: press play on its row or clip page, it
 goes into the player bar, shows a waveform, can be scrubbed, repeated
@@ -118,11 +116,12 @@ A MIDI clip that can't be played says so where the waveform would be,
 its play button is disabled, and it is left out of a playlist's queue,
 so playing through a playlist goes straight past it. In the app it has
 no "keep downloaded" switch, as there is nothing to keep. That happens
-when the file has no notes (some exports carry only a tempo map), or
-when rendering it failed. The badge, labels, Download and Share file
-all still work.
+when the file has no notes (some exports carry only a tempo map), when
+it runs longer than 30 minutes, or when rendering it failed. The text
+is *"This MIDI file can't be played here."* The badge, labels, Download
+and Share file all still work.
 
-Between part 1 shipping and part 2 shipping, every MIDI clip is in that
+Between part 1 shipping and part 2 shipping, every MIDI clip was in that
 state, with the text *"Playback for MIDI files is coming."* When part 2
 deploys, the existing MIDI clips become playable without anyone doing
 anything.
@@ -189,7 +188,7 @@ instead, and the system clears the temporary directory in its own time.
 The web works the same way: the badge, the same text in place of the
 waveform, and unplayable clips left out of a playlist's queue.
 
-### Rendering (part 2)
+### Rendering
 
 A MIDI clip's playback copy is the file rendered to audio on the server:
 the sequence played through a SoundFont synthesiser into PCM, then
@@ -206,34 +205,68 @@ reads SoundFont 2 files and sequences Standard MIDI Files itself. The
 encoder is LAME, compiled into the binary from source; it adds no
 runtime dependency to the image. MP3 because every client plays it and
 it's the format with a mature encoder that doesn't need ffmpeg. The
-render is 44.1 kHz stereo at a constant 192 kbps, and runs on until the
-last note's release has faded rather than stopping dead at the last
-note-off.
+render is 44.1 kHz stereo at a constant 192 kbps, with the LAME tag
+written into the first frame, so players know the exact length and the
+encoder's delay, which a gapless repeat needs.
+
+The render runs on past the last event while the notes' release and
+the reverb ring out, until a block is 60 dB below the loudest moment or
+five seconds have passed. Reverb takes much longer than that to fall
+silent, and seconds of near-nothing at the end of a clip are worse than
+a slightly early cut, especially when it repeats.
+
+rustysynth's output peaks well below a recording's, around −12 dBFS on
+a full arrangement, so a MIDI clip would come out noticeably quieter
+than the recordings around it in a playlist. The render is normalised:
+its loudest sample is brought to −1 dBFS, with the gain capped at 8×
+so a nearly silent file isn't turned into noise. That needs the peak
+before encoding starts, and holding up to thirty minutes of stereo in
+memory to find it isn't worth it, so the synthesis runs twice: once to
+measure the peak and where the tail fades, and once to encode at the
+right gain. Synthesis is deterministic and much cheaper than encoding.
 
 The instrument set is
 [GeneralUser GS](https://schristiancollins.com/generaluser.php), a
 General MIDI SoundFont of about 30 MB whose licence permits this use. It
-is downloaded at image build time from a pinned URL with a checksum, not
-committed, and its path is configurable so local development can point
-at a copy anywhere. Without one configured, the server starts and stores
-MIDI clips unrendered, and logs that it is doing so.
+is not committed. One script holds its URL, pinned to a commit of the
+author's repository, and its checksum. The image build runs it, and so
+does `local/run` the first time it's needed. The server finds it through
+`IGGYBILLY_SOUNDFONT` and loads it once at startup. Without one
+configured, the server starts, logs a warning and stores MIDI clips
+unrendered. One that is configured but can't be loaded stops the server,
+because quietly leaving every MIDI clip unplayable would be the harder
+problem to notice.
 
 Rendering happens during the upload, after detection, as remuxing does.
-A five-minute arrangement renders and encodes in a couple of seconds,
-which is acceptable next to the upload itself; a file whose sequence
+In a release build, a twenty-second groove renders and encodes in about
+a third of a second and a dense five-minute arrangement in about four,
+which is acceptable next to the upload itself. The synthesiser and LAME
+are optimised in debug builds too, which keeps `local/run` within two
+or three times that. A file whose sequence
 runs longer than 30 minutes is not rendered at all, since that is
 almost certainly a mistake in the file and the render would hold the
 upload for a long time. Such a clip, a file with no notes, and one whose
 render fails are all stored without a playback copy and logged.
 
-Each MIDI clip also records which renderer made its copy, as a short
-version string covering the SoundFont and the render settings, or that
-rendering was tried and declined. The startup pass that 003 introduced
-goes through MIDI clips whose recorded version isn't the current one and
-renders them in the background. That is how the clips uploaded during
-part 1 become playable, and it means a later change of SoundFont or
-settings re-renders every MIDI clip by bumping the version, and the
-app's caches pick up the new copies through the changed audio URL.
+Each MIDI clip also records which renderer looked at it: a short
+version string made of a settings number and the start of the
+SoundFont's SHA-256. It is recorded whether or not a copy came of it, so
+a file with no notes, or one whose render failed, isn't tried again on
+every start. The startup pass that 003 introduced goes through MIDI
+clips whose recorded version isn't the current one and renders them in
+the background, then removes the copy it replaced. That is how the
+clips uploaded during part 1 become playable. A new SoundFont re-renders
+every MIDI clip without anyone bumping anything, and a change to the
+settings does it once the settings number is bumped.
+
+The version is part of the rendering's filename, and the audio URL's
+`v` names the file it streams, so a re-render changes the URL and the
+app's cache drops its old copy. Doing this showed that `v` had never
+worked for 003's copies: it was the first eight characters of the
+streamed file's name, and a copy's name starts with the same stem as
+its upload. A clip with a playback copy now gets a short hash of the
+copy's whole name instead. The one-time effect is that ADTS clips cached
+before 003 are fetched again, which is what 003 meant to happen.
 
 ## Later: viewing the structure
 

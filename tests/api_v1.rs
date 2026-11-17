@@ -17,6 +17,16 @@ struct Server {
 }
 
 async fn start() -> Server {
+    start_with(None).await
+}
+
+/// A server that renders MIDI with the tiny one-sine SoundFont in the
+/// fixtures.
+async fn start_rendering() -> Server {
+    start_with(Some(midi_fixture("tiny.sf2"))).await
+}
+
+async fn start_with(soundfont: Option<std::path::PathBuf>) -> Server {
     let temp = tempfile::tempdir().expect("tempdir");
     let data_dir = temp.path().to_path_buf();
     let audio_dir = data_dir.join("audio");
@@ -32,6 +42,7 @@ async fn start() -> Server {
         secure_cookies: false,
         discord_webhook_url: None,
         base_url: None,
+        soundfont,
     };
 
     let pool = iggybilly::db::connect(&db_path).await.unwrap();
@@ -890,7 +901,7 @@ async fn backfill_gives_old_adts_clips_a_playback_copy() {
         .await
         .unwrap();
 
-    iggybilly::playback::backfill(&srv.pool, &audio_dir)
+    iggybilly::playback::backfill(&srv.pool, &audio_dir, None)
         .await
         .unwrap();
 
@@ -1011,13 +1022,150 @@ async fn midi_of_a_kind_we_cannot_use_is_refused() {
     }
 }
 
+fn midi_fixture(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/midi")
+        .join(name)
+}
+
 fn midi_bytes(name: &str) -> Vec<u8> {
-    std::fs::read(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/midi")
-            .join(name),
-    )
-    .unwrap()
+    std::fs::read(midi_fixture(name)).unwrap()
+}
+
+async fn upload_midi(srv: &Server, c: &reqwest::Client, token: &str, name: &str) -> i64 {
+    let form = reqwest::multipart::Form::new().part(
+        "audio",
+        reqwest::multipart::Part::bytes(midi_bytes(name)).file_name(name.to_string()),
+    );
+    let r = c
+        .post(format!("{}/api/v1/clips", srv.base))
+        .bearer_auth(token)
+        .multipart(form)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let body: serde_json::Value = r.json().await.unwrap();
+    body["clips"][0]["id"].as_i64().unwrap()
+}
+
+#[tokio::test]
+async fn midi_files_are_rendered_to_mp3_and_download_as_uploaded() {
+    let srv = start_rendering().await;
+    let (c, token) = signed_in(&srv).await;
+    let id = upload_midi(&srv, &c, &token, "groove.mid").await;
+
+    let (_, clip) = get(&srv, &c, &token, &format!("/api/v1/clips/{id}")).await;
+    assert_eq!(clip["format"], "midi");
+    assert_eq!(clip["playable"], true);
+    assert_eq!(clip["contentType"], "audio/mpeg", "the type of what plays");
+    assert!(clip["peaks"].is_array(), "a waveform of the rendering");
+    assert!(clip["durationSeconds"].as_f64().unwrap() > 1.0);
+
+    let r = c
+        .get(format!(
+            "{}{}",
+            srv.base,
+            clip["audioUrl"].as_str().unwrap()
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(r.headers()["content-type"], "audio/mpeg");
+
+    let r = c
+        .get(format!(
+            "{}{}",
+            srv.base,
+            clip["downloadUrl"].as_str().unwrap()
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.headers()["content-type"], "audio/midi");
+    assert_eq!(r.bytes().await.unwrap().as_ref(), midi_bytes("groove.mid"));
+
+    // Deleting removes the rendering too.
+    let audio_dir = srv._temp.path().join("audio");
+    assert_eq!(std::fs::read_dir(&audio_dir).unwrap().count(), 2);
+    let r = c
+        .delete(format!("{}/api/v1/clips/{id}", srv.base))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_success());
+    assert_eq!(std::fs::read_dir(&audio_dir).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn a_midi_file_without_notes_is_stored_but_not_rendered() {
+    let srv = start_rendering().await;
+    let (c, token) = signed_in(&srv).await;
+    let id = upload_midi(&srv, &c, &token, "tempo-only.mid").await;
+    let (_, clip) = get(&srv, &c, &token, &format!("/api/v1/clips/{id}")).await;
+    assert_eq!(clip["playable"], false);
+
+    let (version,): (Option<String>,) =
+        sqlx::query_as("SELECT render_version FROM clips WHERE id = ?")
+            .bind(id)
+            .fetch_one(&srv.pool)
+            .await
+            .unwrap();
+    assert!(version.is_some(), "looked at, so not tried again");
+}
+
+#[tokio::test]
+async fn backfill_renders_midi_clips_the_renderer_has_not_seen() {
+    // Uploaded with no SoundFont, as in part 1.
+    let srv = start().await;
+    let (c, token) = signed_in(&srv).await;
+    let id = upload_midi(&srv, &c, &token, "groove.mid").await;
+    let (_, before) = get(&srv, &c, &token, &format!("/api/v1/clips/{id}")).await;
+    assert_eq!(before["playable"], false);
+
+    let audio_dir = srv._temp.path().join("audio");
+    let renderer = std::sync::Arc::new(
+        iggybilly::midi_render::Renderer::load(&midi_fixture("tiny.sf2")).unwrap(),
+    );
+    iggybilly::playback::backfill(&srv.pool, &audio_dir, Some(renderer.clone()))
+        .await
+        .unwrap();
+    let (_, rendered) = get(&srv, &c, &token, &format!("/api/v1/clips/{id}")).await;
+    assert_eq!(rendered["playable"], true);
+    assert!(rendered["peaks"].is_array());
+    assert_ne!(rendered["audioUrl"], before["audioUrl"]);
+
+    // Up to date: nothing to do.
+    iggybilly::playback::backfill(&srv.pool, &audio_dir, Some(renderer.clone()))
+        .await
+        .unwrap();
+    let (_, again) = get(&srv, &c, &token, &format!("/api/v1/clips/{id}")).await;
+    assert_eq!(again["audioUrl"], rendered["audioUrl"]);
+
+    // Made by another version: rendered again under a new name, and the
+    // old rendering is removed.
+    let (old,): (String,) = sqlx::query_as("SELECT playback_filename FROM clips WHERE id = ?")
+        .bind(id)
+        .fetch_one(&srv.pool)
+        .await
+        .unwrap();
+    let stale = old.replace(renderer.version(), "0-stale");
+    std::fs::rename(audio_dir.join(&old), audio_dir.join(&stale)).unwrap();
+    sqlx::query("UPDATE clips SET playback_filename = ?, render_version = '0-stale' WHERE id = ?")
+        .bind(&stale)
+        .bind(id)
+        .execute(&srv.pool)
+        .await
+        .unwrap();
+    iggybilly::playback::backfill(&srv.pool, &audio_dir, Some(renderer))
+        .await
+        .unwrap();
+    assert!(audio_dir.join(&old).exists());
+    assert!(!audio_dir.join(&stale).exists());
 }
 
 /// Real audio for an upload named `name`, chosen by its extension: the

@@ -15,8 +15,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     error::{AppError, AppResult},
+    models::Band,
     queries,
-    web::{ApiUser, AppState},
+    web::{ApiBand, AppState, ClipLabelPath, IdPath, LabelRevPath},
 };
 
 use super::clips::Label;
@@ -34,8 +35,8 @@ pub struct AddRequest {
 /// did with the name it sent.
 pub async fn add(
     State(state): State<AppState>,
-    ApiUser { user, .. }: ApiUser,
-    Path(clip_id): Path<i64>,
+    ApiBand { user, band, .. }: ApiBand,
+    Path(IdPath { id: clip_id, .. }): Path<IdPath>,
     Json(req): Json<AddRequest>,
 ) -> AppResult<Response> {
     let raw = req.name.trim();
@@ -50,20 +51,27 @@ pub async fn add(
             "labels must be lower-kebab-case: letters/digits separated by single dashes, no spaces or other punctuation".into(),
         ));
     }
-    if !queries::clips::exists(&state.pool, clip_id).await? {
+    if !queries::clips::exists(&state.pool, band.id, clip_id).await? {
         return Err(AppError::NotFound);
     }
-    queries::labels::add_to_clip(&state.pool, clip_id, &normalised, user.id).await?;
+    queries::labels::add_to_clip(&state.pool, band.id, clip_id, &normalised, user.id).await?;
     labels_response(&state, clip_id).await
 }
 
 /// DELETE /api/v1/clips/{id}/labels/{label_id}
 pub async fn remove(
     State(state): State<AppState>,
-    _user: ApiUser,
-    Path((clip_id, label_id)): Path<(i64, i64)>,
+    ApiBand { band, .. }: ApiBand,
+    Path(ClipLabelPath {
+        id: clip_id,
+        label_id,
+        ..
+    }): Path<ClipLabelPath>,
 ) -> AppResult<Response> {
-    queries::labels::remove_from_clip(&state.pool, clip_id, label_id).await?;
+    if !queries::clips::exists(&state.pool, band.id, clip_id).await? {
+        return Err(AppError::NotFound);
+    }
+    queries::labels::remove_from_clip(&state.pool, band.id, clip_id, label_id).await?;
     labels_response(&state, clip_id).await
 }
 
@@ -98,12 +106,13 @@ struct Playlist {
 /// label would break every installed app the moment the server rolled.
 pub async fn playlist(
     State(state): State<AppState>,
-    ApiUser { user, .. }: ApiUser,
-    Path(label_id): Path<i64>,
+    ApiBand { user, band, .. }: ApiBand,
+    Path(IdPath { id: label_id, .. }): Path<IdPath>,
 ) -> AppResult<Response> {
-    let name = label_name(&state, label_id).await?;
+    let name = label_name(&state, &band, label_id).await?;
     let rows = queries::clips::list(
         &state.pool,
+        band.id,
         &[name.as_str()],
         queries::clips::ListOrder::Playlist { label_id },
     )
@@ -115,7 +124,7 @@ pub async fn playlist(
         total_seconds,
         clips: rows
             .into_iter()
-            .map(|c| super::clips::clip(c, user.id))
+            .map(|c| super::clips::clip(&band, c, user.id))
             .collect(),
     })
     .into_response())
@@ -126,11 +135,11 @@ pub async fn playlist(
 /// playlist the same way and refuse the same requests.
 pub async fn order(
     State(state): State<AppState>,
-    _user: ApiUser,
-    Path(label_id): Path<i64>,
+    ApiBand { band, .. }: ApiBand,
+    Path(IdPath { id: label_id, .. }): Path<IdPath>,
     Json(req): Json<crate::handlers::labels::OrderRequest>,
 ) -> AppResult<Response> {
-    let order = crate::handlers::labels::set_order(&state, label_id, &req).await?;
+    let order = crate::handlers::labels::set_order(&state, &band, label_id, &req).await?;
     Ok(Json(order).into_response())
 }
 
@@ -152,10 +161,11 @@ struct Suggestions {
 /// GET /api/v1/labels/search
 pub async fn search(
     State(state): State<AppState>,
-    _user: ApiUser,
+    ApiBand { band, .. }: ApiBand,
     Query(q): Query<SearchQuery>,
 ) -> AppResult<Response> {
-    let s = queries::labels::suggest(&state.pool, &q.q.unwrap_or_default(), q.clip_id).await?;
+    let s =
+        queries::labels::suggest(&state.pool, band.id, &q.q.unwrap_or_default(), q.clip_id).await?;
     Ok(Json(Suggestions {
         query: s.query,
         matches: s.matches,
@@ -193,8 +203,8 @@ fn wiki_page(p: queries::wiki::Page) -> WikiPage {
     }
 }
 
-async fn label_name(state: &AppState, label_id: i64) -> AppResult<String> {
-    queries::labels::name_of(&state.pool, label_id)
+async fn label_name(state: &AppState, band: &Band, label_id: i64) -> AppResult<String> {
+    queries::labels::name_of(&state.pool, band.id, label_id)
         .await?
         .ok_or(AppError::NotFound)
 }
@@ -202,10 +212,10 @@ async fn label_name(state: &AppState, label_id: i64) -> AppResult<String> {
 /// GET /api/v1/labels/{id}/wiki
 pub async fn wiki(
     State(state): State<AppState>,
-    _user: ApiUser,
-    Path(label_id): Path<i64>,
+    ApiBand { band, .. }: ApiBand,
+    Path(IdPath { id: label_id, .. }): Path<IdPath>,
 ) -> AppResult<Response> {
-    let name = label_name(&state, label_id).await?;
+    let name = label_name(&state, &band, label_id).await?;
     let page = queries::wiki::page(&state.pool, label_id, &name).await?;
     Ok(Json(wiki_page(page)).into_response())
 }
@@ -219,18 +229,18 @@ pub struct WikiRequest {
 /// it now stands.
 pub async fn save_wiki(
     State(state): State<AppState>,
-    ApiUser { user, .. }: ApiUser,
-    Path(label_id): Path<i64>,
+    ApiBand { user, band, .. }: ApiBand,
+    Path(IdPath { id: label_id, .. }): Path<IdPath>,
     Json(req): Json<WikiRequest>,
 ) -> AppResult<Response> {
-    let name = label_name(&state, label_id).await?;
+    let name = label_name(&state, &band, label_id).await?;
     if req.content.len() > MAX_WIKI_BYTES {
         return Err(AppError::BadRequest(format!(
             "wiki page exceeds {MAX_WIKI_BYTES}-byte limit"
         )));
     }
     queries::wiki::save(&state.pool, label_id, &req.content, user.id).await?;
-    state.discord.wiki_edited(&user.username, &name);
+    state.discord.wiki_edited(&band, &user.username, &name);
     let page = queries::wiki::page(&state.pool, label_id, &name).await?;
     Ok(Json(wiki_page(page)).into_response())
 }
@@ -250,12 +260,12 @@ struct Revision {
 /// GET /api/v1/labels/{id}/wiki/history
 pub async fn wiki_history(
     State(state): State<AppState>,
-    _user: ApiUser,
-    Path(label_id): Path<i64>,
+    ApiBand { band, .. }: ApiBand,
+    Path(IdPath { id: label_id, .. }): Path<IdPath>,
 ) -> AppResult<Response> {
     // Resolve the label first, so a bad id is a 404 rather than an
     // empty history that looks like a page nobody has written.
-    label_name(&state, label_id).await?;
+    label_name(&state, &band, label_id).await?;
     let revisions: Vec<Revision> = queries::wiki::history(&state.pool, label_id)
         .await?
         .into_iter()
@@ -274,14 +284,18 @@ pub async fn wiki_history(
 /// forward as a new one, so nothing is lost by restoring.
 pub async fn restore_wiki(
     State(state): State<AppState>,
-    ApiUser { user, .. }: ApiUser,
-    Path((label_id, rev_id)): Path<(i64, i64)>,
+    ApiBand { user, band, .. }: ApiBand,
+    Path(LabelRevPath {
+        id: label_id,
+        rev: rev_id,
+        ..
+    }): Path<LabelRevPath>,
 ) -> AppResult<Response> {
     let content = queries::wiki::revision_content(&state.pool, label_id, rev_id)
         .await?
         .ok_or(AppError::NotFound)?;
     queries::wiki::save(&state.pool, label_id, &content, user.id).await?;
-    let name = label_name(&state, label_id).await?;
-    state.discord.wiki_edited(&user.username, &name);
+    let name = label_name(&state, &band, label_id).await?;
+    state.discord.wiki_edited(&band, &user.username, &name);
     Ok(StatusCode::NO_CONTENT.into_response())
 }

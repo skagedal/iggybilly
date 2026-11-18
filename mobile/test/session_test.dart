@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:iggybilly/src/api/client.dart';
@@ -186,5 +188,80 @@ void main() {
     session.addListener(() => seen.add(session.status));
     await session.restore();
     expect(seen, [SessionStatus.signedOut]);
+  });
+
+  // -- Bands ----------------------------------------------------------
+
+  test('the band on this device survives a restart', () async {
+    final store = storeWithToken('tok')..band = 'bonband';
+    final session = sessionWith(
+      FakeHttpClient.json(userJson(bands: ['bonband', 'default'])),
+      store: store,
+    );
+    await session.restore();
+    expect(
+      session.band,
+      'bonband',
+      reason: 'the device remembers, rather than taking the server default',
+    );
+  });
+
+  test('a stored band the user has left is dropped', () async {
+    // Removed from bonband since this phone last looked at it. Following
+    // the stored slug would mean every request 404ing.
+    final store = storeWithToken('tok')..band = 'bonband';
+    final session = sessionWith(
+      FakeHttpClient.json(userJson(bands: ['default'], band: 'default')),
+      store: store,
+    );
+    await session.restore();
+    expect(session.band, 'default');
+    expect(store.band, 'default', reason: 'and the device is corrected');
+  });
+
+  test('an account in no band restores with none', () async {
+    final store = storeWithToken('tok');
+    final session = sessionWith(
+      FakeHttpClient.json(userJson(bands: const [], band: null)),
+      store: store,
+    );
+    await session.restore();
+    expect(session.status, SessionStatus.signedIn);
+    expect(session.band, isNull);
+    expect(session.bands, isEmpty);
+  });
+
+  test('switching band tells the server before it takes effect', () async {
+    final store = storeWithToken('tok')..band = 'default';
+    final fake = FakeHttpClient((request) {
+      if (request.url.path == '/api/v1/me') {
+        return http.Response(
+          jsonEncode(userJson(bands: ['bonband', 'default'])),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }
+      return http.Response('', 204);
+    });
+    final session = sessionWith(fake, store: store);
+    await session.restore();
+
+    await session.switchBand('bonband');
+    expect(fake.lastRequest.url.path, '/api/v1/me/band');
+    expect(session.band, 'bonband');
+    expect(store.band, 'bonband', reason: 'and is remembered on the device');
+  });
+
+  test('signing out forgets the band as well as the token', () async {
+    final store = storeWithToken('tok')..band = 'default';
+    final session = sessionWith(FakeHttpClient.json(userJson()), store: store);
+    await session.restore();
+    await session.signOut();
+    expect(store.token, isNull);
+    expect(
+      store.band,
+      isNull,
+      reason: 'the next person to sign in starts in their own band',
+    );
   });
 }

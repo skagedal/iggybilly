@@ -7,13 +7,14 @@ import type { WikiHistoryProps, WikiRevision } from "../types";
 
 export default function WikiHistoryPage({
   username,
+  band,
   labelId,
   labelName,
   revisions,
 }: WikiHistoryProps) {
   const nav = (
     <>
-      <a href="/">Clips</a>
+      <a href={`/${band}/`}>Clips</a>
       <a href="/account">Account</a>
     </>
   );

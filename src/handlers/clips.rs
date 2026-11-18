@@ -4,7 +4,7 @@ use axum::{
     body::Body,
     extract::{Multipart, Path as AxumPath, State},
     http::{header, HeaderValue, StatusCode},
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Redirect, Response},
     Json,
 };
 use axum_extra::extract::Query;
@@ -18,8 +18,9 @@ use tower_http::services::ServeFile;
 use crate::{
     error::{AppError, AppResult},
     handlers::{page, PageFormat},
+    models::Band,
     queries,
-    web::{ApiUser, AppState, CurrentUser, MediaUser, MAX_UPLOAD_BYTES},
+    web::{ApiBand, AppState, BandUser, CurrentUser, IdPath, MediaUser, MAX_UPLOAD_BYTES},
 };
 
 #[derive(Debug, Serialize)]
@@ -57,34 +58,34 @@ pub struct FilterChip {
     pub remove_href: String,
 }
 
-/// Build a "/?label=…&label=…" link from a list of active label filters.
-/// Returns "/" when the list is empty so the home page is reachable
-/// with no query string.
-fn filter_url(labels: &[&str]) -> String {
+/// Build a "/<band>/?label=…&label=…" link from a list of active label
+/// filters. Returns the band's list when the list is empty, so it is
+/// reachable with no query string.
+fn filter_url(band: &str, labels: &[&str]) -> String {
     if labels.is_empty() {
-        return "/".to_string();
+        return format!("/{band}/");
     }
     let qs = serde_urlencoded::to_string(labels.iter().map(|l| ("label", *l)).collect::<Vec<_>>())
         .unwrap_or_default();
-    format!("/?{qs}")
+    format!("/{band}/?{qs}")
 }
 
 /// Turn a stored clip into a row for the list, resolving each label to
 /// the filter link that adds it — or, when it is already filtered on,
 /// to the current filter, so clicking it is a no-op rather than a
 /// duplicate.
-fn clip_row(clip: queries::clips::Clip, active: &[&str]) -> ClipRow {
+fn clip_row(band: &str, clip: queries::clips::Clip, active: &[&str]) -> ClipRow {
     let labels = clip
         .labels
         .into_iter()
         .map(|label| {
             let already_active = active.iter().any(|a| a.eq_ignore_ascii_case(&label.name));
             let href = if already_active {
-                filter_url(active)
+                filter_url(band, active)
             } else {
                 let mut combined: Vec<&str> = active.to_vec();
                 combined.push(&label.name);
-                filter_url(&combined)
+                filter_url(band, &combined)
             };
             LabelLink {
                 name: label.name,
@@ -121,6 +122,9 @@ pub struct ListQuery {
 #[serde(rename_all = "camelCase")]
 struct IndexProps {
     username: String,
+    /// The band this list belongs to. The page needs it to build the
+    /// API URLs it posts to; every href in the props is already built.
+    band: String,
     clips: Vec<ClipRow>,
     active_filters: Vec<FilterChip>,
     /// One wiki page per active filter label that has a label row —
@@ -143,9 +147,36 @@ struct PlaylistInfo {
     total_seconds: f64,
 }
 
-pub async fn list(
+/// GET / — nobody's band, so it sends you to yours: the band you were
+/// last in, or the only one you are in. A member of no band gets the one
+/// page that says so, which is also the only screen they can reach.
+pub async fn landing(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
+    format: PageFormat,
+) -> AppResult<Response> {
+    match queries::bands::landing_band(&state.pool, user.id).await? {
+        Some(band) => Ok(Redirect::to(&format!("/{}/", band.slug)).into_response()),
+        None => page(
+            &state,
+            format,
+            "No band — iggybilly",
+            "no-band",
+            &NoBandProps {
+                username: user.username,
+            },
+        ),
+    }
+}
+
+#[derive(Serialize)]
+struct NoBandProps {
+    username: String,
+}
+
+pub async fn list(
+    State(state): State<AppState>,
+    BandUser { user, band }: BandUser,
     format: PageFormat,
     Query(q): Query<ListQuery>,
 ) -> AppResult<Response> {
@@ -167,7 +198,7 @@ pub async fn list(
     // and that label existing. An intersection of several has no order
     // to choose between, so it stays reverse chronological.
     let playlist_label = match active_strs.as_slice() {
-        [name] => queries::labels::find_by_name(&state.pool, name).await?,
+        [name] => queries::labels::find_by_name(&state.pool, band.id, name).await?,
         _ => None,
     };
     let order = match &playlist_label {
@@ -175,17 +206,17 @@ pub async fn list(
         None => queries::clips::ListOrder::Recent,
     };
 
-    let clips: Vec<ClipRow> = queries::clips::list(&state.pool, &active_strs, order)
+    let clips: Vec<ClipRow> = queries::clips::list(&state.pool, band.id, &active_strs, order)
         .await?
         .into_iter()
-        .map(|c| clip_row(c, &active_strs))
+        .map(|c| clip_row(&band.slug, c, &active_strs))
         .collect();
     let playlist = playlist_label.map(|label| PlaylistInfo {
         label_id: label.id,
         label_name: label.name,
         total_seconds: clips.iter().filter_map(|c| c.duration_seconds).sum(),
     });
-    let active_wikis = super::labels::active_wikis(&state, &active_strs).await?;
+    let active_wikis = super::labels::active_wikis(&state, &band, &active_strs).await?;
 
     // For each active filter, the X-button link drops just that one label.
     let active_filters: Vec<FilterChip> = active
@@ -200,7 +231,7 @@ pub async fn list(
                 .collect();
             FilterChip {
                 name: name.clone(),
-                remove_href: filter_url(&remaining),
+                remove_href: filter_url(&band.slug, &remaining),
             }
         })
         .collect();
@@ -212,6 +243,7 @@ pub async fn list(
         "index",
         &IndexProps {
             username: user.username,
+            band: band.slug.clone(),
             clips,
             active_filters,
             active_wikis,
@@ -251,16 +283,17 @@ struct ClipDetail {
 #[derive(Serialize)]
 struct ClipProps {
     username: String,
+    band: String,
     clip: ClipDetail,
 }
 
 pub async fn detail(
     State(state): State<AppState>,
-    CurrentUser(user): CurrentUser,
+    BandUser { user, band }: BandUser,
     format: PageFormat,
-    AxumPath(id): AxumPath<i64>,
+    AxumPath(IdPath { id, .. }): AxumPath<IdPath>,
 ) -> AppResult<Response> {
-    let clip = queries::clips::get(&state.pool, id)
+    let clip = queries::clips::get(&state.pool, band.id, id)
         .await?
         .ok_or(AppError::NotFound)?;
 
@@ -273,6 +306,7 @@ pub async fn detail(
         "clip",
         &ClipProps {
             username: user.username,
+            band: band.slug.clone(),
             clip: ClipDetail {
                 id: clip.id,
                 name: clip.name,
@@ -281,7 +315,11 @@ pub async fn detail(
                 uploader: clip.uploader,
                 uploaded_at: crate::datefmt::iso_date_from_rfc3339(&clip.uploaded_at),
                 recording_date: clip.recording_date,
-                labels: clip.labels.into_iter().map(clip_label).collect(),
+                labels: clip
+                    .labels
+                    .into_iter()
+                    .map(|l| clip_label(&band.slug, l))
+                    .collect(),
                 peaks: clip.peaks,
                 duration_seconds: clip.duration_seconds,
                 can_delete,
@@ -294,8 +332,8 @@ pub async fn detail(
 
 /// A label on the clip page, carrying the link that filters the list
 /// down to it.
-fn clip_label(label: queries::clips::Label) -> ClipLabel {
-    let filter_href = filter_url(&[label.name.as_str()]);
+fn clip_label(band: &str, label: queries::clips::Label) -> ClipLabel {
+    let filter_href = filter_url(band, &[label.name.as_str()]);
     ClipLabel {
         id: label.id,
         name: label.name,
@@ -310,10 +348,10 @@ fn clip_label(label: queries::clips::Label) -> ClipLabel {
 /// the clip list itself, since the page it was on is now gone.
 pub async fn delete(
     State(state): State<AppState>,
-    ApiUser { user, .. }: ApiUser,
-    AxumPath(id): AxumPath<i64>,
+    ApiBand { user, band, .. }: ApiBand,
+    AxumPath(IdPath { id, .. }): AxumPath<IdPath>,
 ) -> AppResult<Response> {
-    remove(&state, &user, id).await?;
+    remove(&state, &band, &user, id).await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -321,13 +359,20 @@ pub async fn delete(
 /// Shared with the app's delete route.
 pub(crate) async fn remove(
     state: &AppState,
+    band: &Band,
     user: &crate::models::SessionUser,
     id: i64,
 ) -> AppResult<()> {
+    // Scoped by band as every read of a clip is. The uploader check
+    // below is not a substitute for it: a clip stays with its band when
+    // its uploader is removed from that band, so "I uploaded it" and "I
+    // may still reach it" are different questions.
     let row: Option<(i64, String, Option<String>)> = sqlx::query_as(
-        "SELECT uploaded_by, storage_filename, playback_filename FROM clips WHERE id = ?",
+        "SELECT uploaded_by, storage_filename, playback_filename
+         FROM clips WHERE id = ? AND band_id = ?",
     )
     .bind(id)
+    .bind(band.id)
     .fetch_optional(&state.pool)
     .await?;
     let (uploaded_by, storage_filename, playback_filename) = row.ok_or(AppError::NotFound)?;
@@ -339,8 +384,9 @@ pub(crate) async fn remove(
     // CASCADE (foreign_keys is on). Only once the DB commit succeeds do
     // we remove the file, so a failed delete never orphans the row from
     // its bytes.
-    sqlx::query("DELETE FROM clips WHERE id = ?")
+    sqlx::query("DELETE FROM clips WHERE id = ? AND band_id = ?")
         .bind(id)
+        .bind(band.id)
         .execute(&state.pool)
         .await?;
 
@@ -358,11 +404,15 @@ pub(crate) async fn remove(
 }
 
 /// A clip's labels, in the shape the clip page wants them.
-pub(super) async fn load_labels(state: &AppState, clip_id: i64) -> AppResult<Vec<ClipLabel>> {
+pub(super) async fn load_labels(
+    state: &AppState,
+    band: &Band,
+    clip_id: i64,
+) -> AppResult<Vec<ClipLabel>> {
     Ok(queries::clips::labels_for(&state.pool, clip_id)
         .await?
         .into_iter()
-        .map(clip_label)
+        .map(|l| clip_label(&band.slug, l))
         .collect())
 }
 
@@ -376,12 +426,12 @@ pub struct AudioQuery {
 
 pub async fn audio(
     State(state): State<AppState>,
-    _user: MediaUser,
-    AxumPath(id): AxumPath<i64>,
+    MediaUser { band, .. }: MediaUser,
+    AxumPath(IdPath { id, .. }): AxumPath<IdPath>,
     Query(q): Query<AudioQuery>,
     request: axum::extract::Request,
 ) -> AppResult<Response> {
-    let file_row = queries::clips::audio_file(&state.pool, id)
+    let file_row = queries::clips::audio_file(&state.pool, band.id, id)
         .await?
         .ok_or(AppError::NotFound)?;
     let queries::clips::AudioFile {
@@ -485,10 +535,10 @@ fn percent_encode_filename(name: &str) -> String {
 /// `ingest`, which the app's own upload route calls too.
 pub async fn upload(
     State(state): State<AppState>,
-    ApiUser { user, .. }: ApiUser,
+    ApiBand { user, band, .. }: ApiBand,
     multipart: Multipart,
 ) -> AppResult<Response> {
-    let uploaded = ingest(&state, &user, multipart).await?;
+    let uploaded = ingest(&state, &band, &user, multipart).await?;
     Ok(Json(UploadResponse {
         clips: uploaded
             .into_iter()
@@ -504,6 +554,7 @@ pub async fn upload(
 /// name-collision retry have exactly one implementation.
 pub(crate) async fn ingest(
     state: &AppState,
+    band: &Band,
     user: &crate::models::SessionUser,
     mut multipart: Multipart,
 ) -> AppResult<Vec<(i64, String)>> {
@@ -576,6 +627,7 @@ pub(crate) async fn ingest(
         // and try the next suffix instead of bubbling a 500.
         match insert_with_unique_name(
             &state.pool,
+            band.id,
             &display_name_stem,
             &stored,
             &original_filename,
@@ -604,7 +656,9 @@ pub(crate) async fn ingest(
         ));
     }
     // One Discord post for the whole batch, fire-and-forget.
-    state.discord.clips_uploaded(&user.username, &uploaded);
+    state
+        .discord
+        .clips_uploaded(band, &user.username, &uploaded);
 
     Ok(uploaded)
 }
@@ -709,6 +763,7 @@ async fn stream_field_to_file(
 #[allow(clippy::too_many_arguments)]
 async fn insert_with_unique_name(
     pool: &SqlitePool,
+    band_id: i64,
     base: &str,
     stored: &StoredUpload,
     original_filename: &str,
@@ -726,8 +781,12 @@ async fn insert_with_unique_name(
         } else {
             format!("{base} ({n})")
         };
+        // A name means one recording within a band, so the suffixing
+        // resolves against this band's clips alone: another band
+        // having a Take 3 is not a reason for this one to get a Take 3 (2).
         let exists: Option<(i64,)> =
-            sqlx::query_as("SELECT id FROM clips WHERE name = ? COLLATE NOCASE")
+            sqlx::query_as("SELECT id FROM clips WHERE band_id = ? AND name = ? COLLATE NOCASE")
+                .bind(band_id)
                 .bind(&candidate)
                 .fetch_optional(pool)
                 .await?;
@@ -745,8 +804,8 @@ async fn insert_with_unique_name(
             "INSERT INTO clips (name, storage_filename, original_filename, content_type,
                                 size_bytes, uploaded_by, recording_date, peaks, duration_seconds,
                                 format, playback_filename, playback_content_type,
-                                render_version)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                render_version, band_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&candidate)
         .bind(&stored.storage_filename)
@@ -761,6 +820,7 @@ async fn insert_with_unique_name(
         .bind(stored.prepared.copy.as_ref().map(|c| c.filename.as_str()))
         .bind(stored.prepared.copy.as_ref().map(|c| c.content_type))
         .bind(stored.prepared.render_version.as_deref())
+        .bind(band_id)
         .execute(pool)
         .await;
 
@@ -928,17 +988,22 @@ struct RenameResponse {
 
 pub async fn rename(
     State(state): State<AppState>,
-    _user: ApiUser,
-    AxumPath(id): AxumPath<i64>,
+    ApiBand { band, .. }: ApiBand,
+    AxumPath(IdPath { id, .. }): AxumPath<IdPath>,
     Json(req): Json<RenameRequest>,
 ) -> AppResult<Response> {
-    let name = set_name(&state, id, &req.name).await?;
+    let name = set_name(&state, &band, id, &req.name).await?;
     Ok(Json(RenameResponse { name }).into_response())
 }
 
 /// Rename a clip, returning the name it ended up with. Shared with the
 /// app's rename route.
-pub(crate) async fn set_name(state: &AppState, id: i64, requested: &str) -> AppResult<String> {
+pub(crate) async fn set_name(
+    state: &AppState,
+    band: &Band,
+    id: i64,
+    requested: &str,
+) -> AppResult<String> {
     let new_name = requested.trim();
     if new_name.is_empty() {
         return Err(AppError::BadRequest("name can't be empty".into()));
@@ -947,9 +1012,10 @@ pub(crate) async fn set_name(state: &AppState, id: i64, requested: &str) -> AppR
     // Let the UNIQUE index be the source of truth — no SELECT-then-
     // UPDATE TOCTOU. Map a unique-violation back to a clean 409 the
     // rename form can show inline.
-    let result = sqlx::query("UPDATE clips SET name = ? WHERE id = ?")
+    let result = sqlx::query("UPDATE clips SET name = ? WHERE id = ? AND band_id = ?")
         .bind(new_name)
         .bind(id)
+        .bind(band.id)
         .execute(&state.pool)
         .await;
 

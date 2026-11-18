@@ -187,17 +187,36 @@ class Clip {
 
 /// The signed-in user.
 class User {
-  const User({required this.id, required this.username, required this.isAdmin});
+  const User({
+    required this.id,
+    required this.username,
+    required this.isAdmin,
+    this.bands = const [],
+    this.band,
+  });
 
   factory User.fromJson(Map<String, dynamic> json) => User(
     id: json['id'] as int,
     username: json['username'] as String,
     isAdmin: json['isAdmin'] as bool? ?? false,
+    bands: (json['bands'] as List<dynamic>? ?? const [])
+        .map((b) => b as String)
+        .toList(),
+    band: json['band'] as String?,
   );
 
   final int id;
   final String username;
   final bool isAdmin;
+
+  /// Every band this user is in, by slug. The account screen draws its
+  /// list from this, and a user in exactly one sees it named with
+  /// nothing to pick.
+  final List<String> bands;
+
+  /// The band the server has them in last, or null for an account in no
+  /// band — which is a screen of its own, not an empty clip list.
+  final String? band;
 }
 
 /// A label's wiki page. [content] is Markdown source, not HTML.

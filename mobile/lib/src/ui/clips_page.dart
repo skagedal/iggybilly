@@ -4,6 +4,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
+import '../auth/session.dart';
 import '../format.dart';
 import '../player/player_controller.dart';
 import 'account_page.dart';
@@ -46,10 +47,49 @@ class _ClipsPageState extends State<ClipsPage> {
   String? _error;
   bool _loading = true;
 
+  /// The band this list was last loaded for, so a switch on the account
+  /// screen is noticed here rather than leaving another band's clips on
+  /// screen under the new band's name.
+  String? _loadedBand;
+
+  /// Held rather than looked up again on the way out: `dispose` runs
+  /// after the element is deactivated, and an inherited-widget lookup
+  /// there is an error.
+  Session? _session;
+
   @override
   void initState() {
     super.initState();
+    final session = sessionOf(context);
+    _session = session;
+    session.addListener(_onSessionChanged);
+    _loadedBand = session.band;
     // Not awaited: the first frame is the spinner.
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _session?.removeListener(_onSessionChanged);
+    super.dispose();
+  }
+
+  /// Reload from scratch when the band changes.
+  ///
+  /// Filters go with it: a label belongs to a band, so filtering by
+  /// `verse-1` in the band you have just left means nothing in the one
+  /// you have arrived in, even when both happen to have that label.
+  void _onSessionChanged() {
+    final band = _session?.band;
+    if (band == _loadedBand) return;
+    _loadedBand = band;
+    if (band == null) return;
+    setState(() {
+      _filters = const [];
+      _clips = null;
+      _playlist = null;
+      _wikis = const [];
+    });
     _load();
   }
 

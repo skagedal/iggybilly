@@ -6,12 +6,16 @@ import 'package:iggybilly/src/api/client.dart';
 
 import 'fakes.dart';
 
-IggybillyApi apiWith(FakeHttpClient http, {String? token = 'tok'}) =>
-    IggybillyApi(
-      baseUrl: Uri.parse('https://example.test'),
-      httpClient: http,
-      token: token,
-    );
+IggybillyApi apiWith(
+  FakeHttpClient http, {
+  String? token = 'tok',
+  String? band = 'default',
+}) => IggybillyApi(
+  baseUrl: Uri.parse('https://example.test'),
+  httpClient: http,
+  token: token,
+  band: band,
+);
 
 void main() {
   test('every authenticated request carries the bearer token', () async {
@@ -57,7 +61,7 @@ void main() {
     });
     final playlist = await apiWith(fake).playlist(4);
 
-    expect(fake.lastRequest.url.path, '/api/v1/labels/4/playlist');
+    expect(fake.lastRequest.url.path, '/api/v1/default/labels/4/playlist');
     expect(playlist.clips.map((c) => c.id), [3, 1]);
     expect(playlist.total, const Duration(milliseconds: 90500));
   });
@@ -71,7 +75,7 @@ void main() {
       final order = await apiWith(fake).reorderPlaylist(4, 2, null);
 
       expect(fake.lastRequest.method, 'POST');
-      expect(fake.lastRequest.url.path, '/api/v1/labels/4/order');
+      expect(fake.lastRequest.url.path, '/api/v1/default/labels/4/order');
       expect(jsonDecode(fake.lastRequest.body), {
         'clipId': 2,
         'afterClipId': null,
@@ -178,7 +182,7 @@ void main() {
     final fake = FakeHttpClient((_) => http.Response('', 204));
     await apiWith(fake).deleteClip(3);
     expect(fake.lastRequest.method, 'DELETE');
-    expect(fake.lastRequest.url.path, '/api/v1/clips/3');
+    expect(fake.lastRequest.url.path, '/api/v1/default/clips/3');
   });
 
   test('wiki pages come back as Markdown source', () async {

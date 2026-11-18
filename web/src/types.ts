@@ -94,6 +94,8 @@ export interface PlaylistInfo {
 
 export interface IndexProps {
   username: string;
+  /** The band this list belongs to, for the links the page builds. */
+  band: string;
   /** In playlist order when `playlist` is set, newest first otherwise. */
   clips: ClipSummary[];
   activeFilters: FilterChip[];
@@ -104,17 +106,28 @@ export interface IndexProps {
 
 export interface ClipProps {
   username: string;
+  band: string;
   clip: ClipDetail;
 }
 
 export interface WikiHistoryProps {
   username: string;
+  band: string;
   labelId: number;
   labelName: string;
   revisions: WikiRevision[];
 }
 
 export interface AccountProps {
+  username: string;
+  /** Every band the user is in, by slug, alphabetically. */
+  bands: string[];
+  /** The one they were last in, or null when they are in none. */
+  band: string | null;
+}
+
+/** The only screen a user in no band can reach. */
+export interface NoBandProps {
   username: string;
 }
 

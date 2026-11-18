@@ -1,8 +1,8 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use axum::{
-    extract::{DefaultBodyLimit, FromRequestParts},
+    extract::{DefaultBodyLimit, FromRequestParts, Path},
     http::request::Parts,
     response::{IntoResponse, Redirect, Response},
     routing::{get, post},
@@ -26,7 +26,7 @@ use crate::{
     error::AppError,
     handlers::{account, auth as auth_handlers, clips, labels},
     midi_render::Renderer,
-    models::SessionUser,
+    models::{Band, SessionUser},
 };
 
 pub const SESSION_USER_KEY: &str = "user";
@@ -162,14 +162,30 @@ pub async fn build_app_with(
     // URLs that return an HTML shell plus that page's React bundle, so
     // the app stays multi-page and the server keeps owning routing.
     // Everything under /api is JSON, called by those bundles with fetch.
+    //
+    // Every page about a band's content sits under the band's slug;
+    // signing in and the account screen do not, because they are about
+    // the person rather than about a band. `/` is nobody's band, so it
+    // sends you to yours.
     let pages = Router::new()
-        .route("/", get(clips::list))
-        .route("/clips/{id}", get(clips::detail))
-        .route("/labels/{id}/wiki/history", get(labels::wiki_history))
+        .route("/", get(clips::landing))
+        // Both spellings, because a band's list is the one URL people
+        // type and shorten by hand, and `/bonband` meaning nothing while
+        // `/bonband/` works would be a puzzle rather than a redirect.
+        .route("/{band}", get(clips::list))
+        .route("/{band}/", get(clips::list))
+        .route("/{band}/clips/{id}", get(clips::detail))
+        .route(
+            "/{band}/labels/{id}/wiki/history",
+            get(labels::wiki_history),
+        )
         .route("/login", get(auth_handlers::login_form))
         .route("/account", get(account::form));
 
-    let api = Router::new()
+    // The band-scoped half of the web's own JSON API. Everything here
+    // reads or writes one band's content, so the slug is in the path for
+    // the same reason it is in the page URLs.
+    let band_api = Router::new()
         .route(
             "/clips",
             post(clips::upload).layer(DefaultBodyLimit::max(MAX_UPLOAD_REQUEST_BYTES)),
@@ -190,20 +206,29 @@ pub async fn build_app_with(
         .route(
             "/labels/{id}/wiki/restore/{rev}",
             post(labels::wiki_restore),
-        )
+        );
+
+    // The rest of /api is about the session or the account, and belongs
+    // to no band.
+    let api = Router::new()
         .route("/login", post(auth_handlers::login))
         .route("/logout", post(auth_handlers::logout))
-        .route("/account/password", post(account::change_password));
+        .route("/account/password", post(account::change_password))
+        .route("/account/band", post(account::switch_band));
 
     Ok(pages
         .merge(Router::new().nest("/api", api))
+        .merge(Router::new().nest("/api/{band}", band_api))
         // And /api/v1 is the app's: the same data, shaped for a phone
         // rather than for the React pages. See `crate::api`.
-        .merge(Router::new().nest("/api/v1", crate::api::router()))
+        .merge(Router::new().nest("/api/v1", crate::api::band_router()))
+        .merge(Router::new().nest("/api/v1/{band}", crate::api::band_router()))
+        .merge(Router::new().nest("/api/v1", crate::api::account_router()))
         // Audio is none of those: the browser hits it directly as an
         // <audio> src and as a download link, and the app hands it to
-        // the platform player, so it stays a plain URL.
-        .route("/clips/{id}/audio", get(clips::audio))
+        // the platform player, so it stays a plain URL — a plain URL
+        // under the band, like every other link to a clip.
+        .route("/{band}/clips/{id}/audio", get(clips::audio))
         .route("/healthz", get(healthz))
         .nest_service("/static", ServeDir::new(&static_dir))
         .layer(session_layer)
@@ -256,6 +281,62 @@ where
     }
 }
 
+/// Which band a request is about, resolved from the slug in its path and
+/// checked against the caller's membership.
+///
+/// A slug that names no band and a slug that names a band the caller is
+/// not in both come back as `NotFound`, from one query, so the two cannot
+/// be told apart — otherwise trying slugs would be a way for a member of
+/// one band to learn who else is on the instance.
+async fn band_from_path(
+    parts: &mut Parts,
+    state: &AppState,
+    user: &SessionUser,
+) -> Result<Band, AppError> {
+    let slug = path_param(parts, state, "band")
+        .await
+        .ok_or(AppError::NotFound)?;
+    crate::queries::bands::resolve_for_member(&state.pool, &slug, user.id)
+        .await?
+        .ok_or(AppError::NotFound)
+}
+
+/// One named path capture, as a string. Extracting `Path` here doesn't
+/// consume it, so a handler can still take its own typed parameters.
+async fn path_param(parts: &mut Parts, state: &AppState, name: &str) -> Option<String> {
+    let Path(params) = Path::<HashMap<String, String>>::from_request_parts(parts, state)
+        .await
+        .ok()?;
+    params.get(name).cloned()
+}
+
+/// A page about one band's content: the signed-in user, and the band.
+///
+/// Arriving here also makes this band the one the user was last in, so a
+/// link someone sent takes precedence over whatever they were looking at
+/// before — nobody has to switch bands before a link works. The write is
+/// conditional on the value actually changing, so an ordinary page view
+/// costs a statement that matches no rows.
+pub struct BandUser {
+    pub user: SessionUser,
+    pub band: Band,
+}
+
+impl FromRequestParts<AppState> for BandUser {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Response> {
+        let CurrentUser(user) = CurrentUser::from_request_parts(parts, state).await?;
+        let band = band_from_path(parts, state, &user)
+            .await
+            .map_err(|e| e.into_response())?;
+        crate::queries::bands::set_last_band(&state.pool, user.id, band.id)
+            .await
+            .map_err(|e| e.into_response())?;
+        Ok(BandUser { user, band })
+    }
+}
+
 /// The caller of a JSON endpoint, however they identified themselves.
 ///
 /// Two clients, two credentials: the browser sends its session cookie,
@@ -295,30 +376,86 @@ impl FromRequestParts<AppState> for ApiUser {
     }
 }
 
+/// A JSON endpoint about one band's content, for either client.
+///
+/// The band comes from the path when the path carries one, and from the
+/// caller's last band when it does not. That second case is only for the
+/// `/api/v1` routes without a band segment, which every app already
+/// installed still calls and will go on calling until each phone
+/// updates. For a user in one band — every user on the day this ships —
+/// it resolves to their band and the old app carries on working.
+///
+/// This is the one place the last-band preference scopes a request
+/// rather than directing a person, and it is why that preference has to
+/// be a column: a bearer token from an old app build has no session to
+/// keep it in.
+pub struct ApiBand {
+    pub user: SessionUser,
+    #[allow(dead_code)]
+    pub token_id: Option<i64>,
+    pub band: Band,
+}
+
+impl FromRequestParts<AppState> for ApiBand {
+    type Rejection = AppError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, AppError> {
+        let ApiUser { user, token_id } = ApiUser::from_request_parts(parts, state).await?;
+        let band = match path_param(parts, state, "band").await {
+            Some(slug) => crate::queries::bands::resolve_for_member(&state.pool, &slug, user.id)
+                .await?
+                .ok_or(AppError::NotFound)?,
+            None => crate::queries::bands::landing_band(&state.pool, user.id)
+                .await?
+                .ok_or(AppError::NoBand)?,
+        };
+        Ok(ApiBand {
+            user,
+            token_id,
+            band,
+        })
+    }
+}
+
 /// The audio route, which is neither a page nor a JSON endpoint: the
 /// browser reaches it as an `<audio>` source and the app hands it to the
 /// platform player, so it takes either credential and fails the way the
 /// caller can act on — 401 for a request that presented a token, a
 /// redirect to the login page for a browser that presented nothing.
-pub struct MediaUser(#[allow(dead_code)] pub SessionUser);
+/// It carries the band from its path as well, so the bytes of a clip are
+/// reachable only under the band that owns it — the audio URL is a link
+/// like any other and is checked like any other.
+pub struct MediaUser {
+    #[allow(dead_code)]
+    pub user: SessionUser,
+    pub band: Band,
+}
 
 impl FromRequestParts<AppState> for MediaUser {
     type Rejection = Response;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Response> {
-        if let Some(secret) = bearer_token(parts) {
-            return match crate::tokens::authenticate(&state.pool, &secret).await {
-                Ok(Some((user, _))) => Ok(MediaUser(user)),
+        let user = if let Some(secret) = bearer_token(parts) {
+            match crate::tokens::authenticate(&state.pool, &secret).await {
+                Ok(Some((user, _))) => user,
                 Ok(None) => {
-                    Err(AppError::Unauthorized("invalid or revoked token".into()).into_response())
+                    return Err(
+                        AppError::Unauthorized("invalid or revoked token".into()).into_response()
+                    )
                 }
-                Err(e) => Err(e.into_response()),
-            };
-        }
-        match session_user(parts, state).await {
-            Ok(user) => Ok(MediaUser(user)),
-            Err(_) => Err(Redirect::to("/login").into_response()),
-        }
+                Err(e) => return Err(e.into_response()),
+            }
+        } else {
+            match session_user(parts, state).await {
+                Ok(user) => user,
+                Err(_) => return Err(Redirect::to("/login").into_response()),
+            }
+        };
+
+        let band = band_from_path(parts, state, &user)
+            .await
+            .map_err(|e| e.into_response())?;
+        Ok(MediaUser { user, band })
     }
 }
 
@@ -348,4 +485,41 @@ async fn session_user(parts: &mut Parts, state: &AppState) -> Result<SessionUser
         Ok(Some(u)) => Ok(u),
         _ => Err(AppError::Unauthorized("not signed in".into())),
     }
+}
+
+/// The path parameters of a route about one clip or one label.
+///
+/// `band` is an `Option` because the `/api/v1` routes exist twice: with
+/// a band segment, which is what an app that knows about bands calls,
+/// and without one, which is what every app already installed calls. One
+/// set of handlers serves both, and `ApiBand` is what turns the absence
+/// into the caller's last band. Handlers destructure the id out and
+/// never read `band` themselves — the extractor has already resolved it
+/// into a `Band` they cannot forget to check.
+#[derive(serde::Deserialize)]
+pub struct IdPath {
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub band: Option<String>,
+    pub id: i64,
+}
+
+/// `/clips/{id}/labels/{label_id}`.
+#[derive(serde::Deserialize)]
+pub struct ClipLabelPath {
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub band: Option<String>,
+    pub id: i64,
+    pub label_id: i64,
+}
+
+/// `/labels/{id}/wiki/restore/{rev}`.
+#[derive(serde::Deserialize)]
+pub struct LabelRevPath {
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub band: Option<String>,
+    pub id: i64,
+    pub rev: i64,
 }

@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:material_ui/material_ui.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
+import '../auth/session.dart';
 import '../format.dart';
 import 'app_scope.dart';
 import 'common.dart';
@@ -23,6 +26,7 @@ class AccountPage extends StatefulWidget {
 class _AccountPageState extends State<AccountPage> {
   List<Device>? _devices;
   String? _error;
+  bool _switchingBand = false;
 
   @override
   void initState() {
@@ -106,6 +110,8 @@ class _AccountPageState extends State<AccountPage> {
               subtitle: Text(session.server.toString()),
             ),
             const Divider(),
+            ..._bandRows(theme, session),
+            const Divider(),
             if (AppScope.of(context).cache case final cache?)
               ListTile(
                 leading: const Icon(Icons.download_outlined),
@@ -145,6 +151,80 @@ class _AccountPageState extends State<AccountPage> {
         ),
       ),
     );
+  }
+
+  /// The band the app is looking at, and the others it could be.
+  ///
+  /// This is the only place the band is switched: the app has no address
+  /// bar to put it in, and a band menu in the title row would be empty
+  /// for everyone but the one or two people who are in more than one.
+  /// Exactly one band names it and offers nothing to tap. None says so.
+  List<Widget> _bandRows(ThemeData theme, Session session) {
+    final bands = session.bands;
+    final current = session.band;
+
+    if (bands.isEmpty) {
+      return [
+        const ListTile(
+          leading: Icon(Icons.group_outlined),
+          title: Text('No band'),
+          subtitle: Text(
+            'Ask whoever runs this iggybilly to add you to a band.',
+          ),
+        ),
+      ];
+    }
+
+    if (bands.length == 1) {
+      return [
+        ListTile(
+          leading: const Icon(Icons.group_outlined),
+          title: const Text('Band'),
+          subtitle: Text(bands.single),
+        ),
+      ];
+    }
+
+    // The group value and the handler live on the RadioGroup rather than
+    // on each tile: the per-tile spelling is deprecated as of 3.32, and
+    // `flutter analyze` is fatal on that.
+    return [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+        child: Text('Band', style: theme.textTheme.titleSmall),
+      ),
+      RadioGroup<String>(
+        groupValue: current,
+        // Not nullable here, so the in-flight guard lives in _switchBand.
+        onChanged: (band) => unawaited(_switchBand(band)),
+        child: Column(
+          children: [
+            for (final band in bands)
+              RadioListTile<String>(value: band, title: Text(band)),
+          ],
+        ),
+      ),
+    ];
+  }
+
+  /// Switch band, and then reload every screen under this one by
+  /// returning to the clip list: the lists, the filters and the player's
+  /// queue all belong to the band we were in and none of them mean
+  /// anything in the new one.
+  Future<void> _switchBand(String? band) async {
+    if (band == null || _switchingBand) return;
+    setState(() => _switchingBand = true);
+    final session = sessionOf(context);
+    final player = AppScope.of(context).player;
+    try {
+      await player.stop();
+      await session.switchBand(band);
+      if (mounted) Navigator.of(context).popUntil((route) => route.isFirst);
+    } on ApiException catch (e) {
+      if (mounted) showMessage(context, e.message, isError: true);
+    } finally {
+      if (mounted) setState(() => _switchingBand = false);
+    }
   }
 
   List<Widget> _deviceRows(ThemeData theme) {

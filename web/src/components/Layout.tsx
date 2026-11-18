@@ -6,16 +6,22 @@ import { api } from "../api";
 interface LayoutProps {
   /** Omitted on the login page, which has no signed-in user. */
   username?: string;
+  /**
+   * The band this screen belongs to, when it belongs to one. The logo
+   * links to its clip list; without a band it links to `/`, which
+   * redirects to whichever band you were last in.
+   */
+  band?: string;
   /** Route-specific nav links, rendered between the name and Sign out. */
   nav?: ReactNode;
   children: ReactNode;
 }
 
-export function Layout({ username, nav, children }: LayoutProps) {
+export function Layout({ username, band, nav, children }: LayoutProps) {
   return (
     <>
       <header>
-        <a className="logo" href="/">
+        <a className="logo" href={band === undefined ? "/" : `/${band}/`}>
           iggybilly
         </a>
         <nav>

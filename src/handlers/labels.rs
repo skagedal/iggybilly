@@ -10,8 +10,10 @@ use crate::{
     datefmt,
     error::{AppError, AppResult},
     handlers::{clips, page, PageFormat},
-    markdown, queries,
-    web::{ApiUser, AppState, CurrentUser},
+    markdown,
+    models::Band,
+    queries,
+    web::{ApiBand, AppState, BandUser, ClipLabelPath, IdPath, LabelRevPath},
 };
 
 /// Cap on a wiki page's Markdown source. Generous for prose; just keeps
@@ -28,8 +30,8 @@ pub struct AddRequest {
 /// guess at what the server did with the name.
 pub async fn add(
     State(state): State<AppState>,
-    ApiUser { user, .. }: ApiUser,
-    AxumPath(clip_id): AxumPath<i64>,
+    ApiBand { user, band, .. }: ApiBand,
+    AxumPath(IdPath { id: clip_id, .. }): AxumPath<IdPath>,
     Json(req): Json<AddRequest>,
 ) -> AppResult<Response> {
     let raw = req.name.trim();
@@ -45,23 +47,30 @@ pub async fn add(
         ));
     }
 
-    if !queries::clips::exists(&state.pool, clip_id).await? {
+    if !queries::clips::exists(&state.pool, band.id, clip_id).await? {
         return Err(AppError::NotFound);
     }
 
-    queries::labels::add_to_clip(&state.pool, clip_id, &normalised, user.id).await?;
+    queries::labels::add_to_clip(&state.pool, band.id, clip_id, &normalised, user.id).await?;
 
-    let labels = clips::load_labels(&state, clip_id).await?;
+    let labels = clips::load_labels(&state, &band, clip_id).await?;
     Ok(Json(labels).into_response())
 }
 
 pub async fn remove(
     State(state): State<AppState>,
-    _user: ApiUser,
-    AxumPath((clip_id, label_id)): AxumPath<(i64, i64)>,
+    ApiBand { band, .. }: ApiBand,
+    AxumPath(ClipLabelPath {
+        id: clip_id,
+        label_id,
+        ..
+    }): AxumPath<ClipLabelPath>,
 ) -> AppResult<Response> {
-    queries::labels::remove_from_clip(&state.pool, clip_id, label_id).await?;
-    let labels = clips::load_labels(&state, clip_id).await?;
+    if !queries::clips::exists(&state.pool, band.id, clip_id).await? {
+        return Err(AppError::NotFound);
+    }
+    queries::labels::remove_from_clip(&state.pool, band.id, clip_id, label_id).await?;
+    let labels = clips::load_labels(&state, &band, clip_id).await?;
     Ok(Json(labels).into_response())
 }
 
@@ -83,11 +92,11 @@ pub(crate) struct OrderResponse {
 /// POST /api/labels/{id}/order
 pub async fn order(
     State(state): State<AppState>,
-    _user: ApiUser,
-    AxumPath(label_id): AxumPath<i64>,
+    ApiBand { band, .. }: ApiBand,
+    AxumPath(IdPath { id: label_id, .. }): AxumPath<IdPath>,
     Json(req): Json<OrderRequest>,
 ) -> AppResult<Response> {
-    Ok(Json(set_order(&state, label_id, &req).await?).into_response())
+    Ok(Json(set_order(&state, &band, label_id, &req).await?).into_response())
 }
 
 /// Move a clip within a label's playlist. Shared with the app's own
@@ -95,10 +104,11 @@ pub async fn order(
 /// doesn't exist is a 404, a clip that doesn't carry it a 400.
 pub(crate) async fn set_order(
     state: &AppState,
+    band: &Band,
     label_id: i64,
     req: &OrderRequest,
 ) -> AppResult<OrderResponse> {
-    label_name(state, label_id).await?;
+    label_name(state, band, label_id).await?;
     let order =
         queries::labels::reorder(&state.pool, label_id, req.clip_id, req.after_clip_id).await?;
     Ok(OrderResponse { order })
@@ -122,10 +132,11 @@ struct Suggestions {
 
 pub async fn search(
     State(state): State<AppState>,
-    _user: ApiUser,
+    ApiBand { band, .. }: ApiBand,
     Query(q): Query<SearchQuery>,
 ) -> AppResult<Response> {
-    let s = queries::labels::suggest(&state.pool, &q.q.unwrap_or_default(), q.clip_id).await?;
+    let s =
+        queries::labels::suggest(&state.pool, band.id, &q.q.unwrap_or_default(), q.clip_id).await?;
     Ok(Json(Suggestions {
         query: s.query,
         matches: s.matches,
@@ -163,6 +174,7 @@ pub(crate) struct WikiPage {
 #[serde(rename_all = "camelCase")]
 struct WikiHistoryProps {
     username: String,
+    band: String,
     label_id: i64,
     label_name: String,
     revisions: Vec<WikiRevision>,
@@ -184,8 +196,8 @@ pub struct WikiRequest {
 }
 
 /// Resolve a label id to its canonical name, 404 if it doesn't exist.
-async fn label_name(state: &AppState, label_id: i64) -> AppResult<String> {
-    queries::labels::name_of(&state.pool, label_id)
+async fn label_name(state: &AppState, band: &Band, label_id: i64) -> AppResult<String> {
+    queries::labels::name_of(&state.pool, band.id, label_id)
         .await?
         .ok_or(AppError::NotFound)
 }
@@ -224,10 +236,14 @@ pub(crate) async fn load_wiki_page(
 /// The wiki page for each active filter label that exists, in the given
 /// order. Used by the clip list to show wikis above the clips. Labels in
 /// `active` that don't exist are skipped.
-pub(crate) async fn active_wikis(state: &AppState, active: &[&str]) -> AppResult<Vec<WikiPage>> {
+pub(crate) async fn active_wikis(
+    state: &AppState,
+    band: &Band,
+    active: &[&str],
+) -> AppResult<Vec<WikiPage>> {
     let mut out = Vec::new();
     for name in active {
-        let Some(label) = queries::labels::find_by_name(&state.pool, name).await? else {
+        let Some(label) = queries::labels::find_by_name(&state.pool, band.id, name).await? else {
             continue;
         };
         out.push(load_wiki_page(state, label.id, &label.name).await?);
@@ -238,10 +254,10 @@ pub(crate) async fn active_wikis(state: &AppState, active: &[&str]) -> AppResult
 /// GET /api/labels/{id}/wiki — a label's current wiki page.
 pub async fn wiki_view(
     State(state): State<AppState>,
-    _user: ApiUser,
-    AxumPath(label_id): AxumPath<i64>,
+    ApiBand { band, .. }: ApiBand,
+    AxumPath(IdPath { id: label_id, .. }): AxumPath<IdPath>,
 ) -> AppResult<Response> {
-    let name = label_name(&state, label_id).await?;
+    let name = label_name(&state, &band, label_id).await?;
     Ok(Json(load_wiki_page(&state, label_id, &name).await?).into_response())
 }
 
@@ -249,29 +265,29 @@ pub async fn wiki_view(
 /// it now stands.
 pub async fn wiki_save(
     State(state): State<AppState>,
-    ApiUser { user, .. }: ApiUser,
-    AxumPath(label_id): AxumPath<i64>,
+    ApiBand { user, band, .. }: ApiBand,
+    AxumPath(IdPath { id: label_id, .. }): AxumPath<IdPath>,
     Json(req): Json<WikiRequest>,
 ) -> AppResult<Response> {
-    let name = label_name(&state, label_id).await?;
+    let name = label_name(&state, &band, label_id).await?;
     if req.content.len() > MAX_WIKI_BYTES {
         return Err(AppError::BadRequest(format!(
             "wiki page exceeds {MAX_WIKI_BYTES}-byte limit"
         )));
     }
     queries::wiki::save(&state.pool, label_id, &req.content, user.id).await?;
-    state.discord.wiki_edited(&user.username, &name);
+    state.discord.wiki_edited(&band, &user.username, &name);
     Ok(Json(load_wiki_page(&state, label_id, &name).await?).into_response())
 }
 
 /// GET /labels/{id}/wiki/history — full page listing every revision.
 pub async fn wiki_history(
     State(state): State<AppState>,
-    CurrentUser(user): CurrentUser,
+    BandUser { user, band }: BandUser,
     format: PageFormat,
-    AxumPath(label_id): AxumPath<i64>,
+    AxumPath(IdPath { id: label_id, .. }): AxumPath<IdPath>,
 ) -> AppResult<Response> {
-    let name = label_name(&state, label_id).await?;
+    let name = label_name(&state, &band, label_id).await?;
     let revisions: Vec<WikiRevision> = queries::wiki::history(&state.pool, label_id)
         .await?
         .into_iter()
@@ -292,6 +308,7 @@ pub async fn wiki_history(
         "wiki-history",
         &WikiHistoryProps {
             username: user.username,
+            band: band.slug.clone(),
             label_id,
             label_name: name,
             revisions,
@@ -304,8 +321,12 @@ pub async fn wiki_history(
 /// see it.
 pub async fn wiki_restore(
     State(state): State<AppState>,
-    ApiUser { user, .. }: ApiUser,
-    AxumPath((label_id, rev_id)): AxumPath<(i64, i64)>,
+    ApiBand { user, band, .. }: ApiBand,
+    AxumPath(LabelRevPath {
+        id: label_id,
+        rev: rev_id,
+        ..
+    }): AxumPath<LabelRevPath>,
 ) -> AppResult<Response> {
     // Scoped to this label, so a mismatched pair of ids cannot pull in
     // another label's content.
@@ -314,7 +335,7 @@ pub async fn wiki_restore(
         .ok_or(AppError::NotFound)?;
 
     queries::wiki::save(&state.pool, label_id, &content, user.id).await?;
-    let name = label_name(&state, label_id).await?;
-    state.discord.wiki_edited(&user.username, &name);
+    let name = label_name(&state, &band, label_id).await?;
+    state.discord.wiki_edited(&band, &user.username, &name);
     Ok(StatusCode::NO_CONTENT.into_response())
 }

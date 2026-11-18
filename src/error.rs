@@ -17,6 +17,17 @@ pub enum AppError {
     Unauthorized(String),
     #[error("forbidden")]
     Forbidden,
+    /// Signed in, and a member of no band, so there is nothing to show.
+    ///
+    /// 403 rather than 401, which matters more than it looks: the app
+    /// treats 401 as "this credential is finished" and answers it by
+    /// throwing its token away and asking for the password again. That is
+    /// right for a revoked token and an endless sign-out loop for an
+    /// account whose password is perfectly good and which simply has no
+    /// band yet — a new user, or Apple's reviewer before the test band
+    /// is ready.
+    #[error("no band")]
+    NoBand,
     #[error("bad request: {0}")]
     BadRequest(String),
     /// Well-formed but conflicts with existing state — currently only a
@@ -54,6 +65,10 @@ impl IntoResponse for AppError {
             AppError::NotFound => (StatusCode::NOT_FOUND, "not found".into()),
             AppError::Unauthorized(m) => (StatusCode::UNAUTHORIZED, m.clone()),
             AppError::Forbidden => (StatusCode::FORBIDDEN, "forbidden".into()),
+            AppError::NoBand => (
+                StatusCode::FORBIDDEN,
+                "You are not a member of any band. Ask the site owner to add you to one.".into(),
+            ),
             AppError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
             AppError::Conflict(m) => (StatusCode::CONFLICT, m.clone()),
             AppError::Multipart(e) => {

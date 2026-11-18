@@ -13,8 +13,9 @@ use serde_json::value::RawValue;
 use crate::{
     error::{AppError, AppResult},
     handlers::clips as web_clips,
+    models::Band,
     queries,
-    web::{ApiUser, AppState},
+    web::{ApiBand, AppState, IdPath},
 };
 
 #[derive(Serialize)]
@@ -84,10 +85,20 @@ fn audio_version(c: &queries::clips::Clip) -> String {
     }
 }
 
-pub(super) fn clip(c: queries::clips::Clip, viewer_id: i64) -> Clip {
+/// One clip as the app sees it.
+///
+/// The two URLs carry the band, like every other link to a clip. The
+/// app is handed them rather than building them, which is why moving
+/// them under the band costs the app nothing.
+pub(super) fn clip(band: &Band, c: queries::clips::Clip, viewer_id: i64) -> Clip {
     Clip {
-        audio_url: format!("/clips/{}/audio?v={}", c.id, audio_version(&c)),
-        download_url: format!("/clips/{}/audio?download=1", c.id),
+        audio_url: format!(
+            "/{}/clips/{}/audio?v={}",
+            band.slug,
+            c.id,
+            audio_version(&c)
+        ),
+        download_url: format!("/{}/clips/{}/audio?download=1", band.slug, c.id),
         can_delete: c.uploaded_by == viewer_id,
         id: c.id,
         name: c.name,
@@ -122,7 +133,7 @@ pub struct ListQuery {
 /// GET /api/v1/clips
 pub async fn list(
     State(state): State<AppState>,
-    ApiUser { user, .. }: ApiUser,
+    ApiBand { user, band, .. }: ApiBand,
     Query(q): Query<ListQuery>,
 ) -> AppResult<Response> {
     // Trim, drop empties, and dedupe case-insensitively, so a filter
@@ -142,25 +153,29 @@ pub async fn list(
     // Always newest first here: the playlist order of a single label is
     // its own route, so this one keeps the shape every installed app
     // already expects.
-    let clips: Vec<Clip> =
-        queries::clips::list(&state.pool, &active_strs, queries::clips::ListOrder::Recent)
-            .await?
-            .into_iter()
-            .map(|c| clip(c, user.id))
-            .collect();
+    let clips: Vec<Clip> = queries::clips::list(
+        &state.pool,
+        band.id,
+        &active_strs,
+        queries::clips::ListOrder::Recent,
+    )
+    .await?
+    .into_iter()
+    .map(|c| clip(&band, c, user.id))
+    .collect();
     Ok(Json(clips).into_response())
 }
 
 /// GET /api/v1/clips/{id}
 pub async fn detail(
     State(state): State<AppState>,
-    ApiUser { user, .. }: ApiUser,
-    Path(id): Path<i64>,
+    ApiBand { user, band, .. }: ApiBand,
+    Path(IdPath { id, .. }): Path<IdPath>,
 ) -> AppResult<Response> {
-    let found = queries::clips::get(&state.pool, id)
+    let found = queries::clips::get(&state.pool, band.id, id)
         .await?
         .ok_or(AppError::NotFound)?;
-    Ok(Json(clip(found, user.id)).into_response())
+    Ok(Json(clip(&band, found, user.id)).into_response())
 }
 
 #[derive(Serialize)]
@@ -182,10 +197,10 @@ struct UploadedClip {
 /// pass.
 pub async fn upload(
     State(state): State<AppState>,
-    ApiUser { user, .. }: ApiUser,
+    ApiBand { user, band, .. }: ApiBand,
     multipart: Multipart,
 ) -> AppResult<Response> {
-    let uploaded = web_clips::ingest(&state, &user, multipart).await?;
+    let uploaded = web_clips::ingest(&state, &band, &user, multipart).await?;
     Ok(Json(UploadResponse {
         clips: uploaded
             .into_iter()
@@ -198,10 +213,10 @@ pub async fn upload(
 /// DELETE /api/v1/clips/{id} — only the uploader may.
 pub async fn delete(
     State(state): State<AppState>,
-    ApiUser { user, .. }: ApiUser,
-    Path(id): Path<i64>,
+    ApiBand { user, band, .. }: ApiBand,
+    Path(IdPath { id, .. }): Path<IdPath>,
 ) -> AppResult<Response> {
-    web_clips::remove(&state, &user, id).await?;
+    web_clips::remove(&state, &band, &user, id).await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -219,10 +234,10 @@ struct RenameResponse {
 /// POST /api/v1/clips/{id}/name
 pub async fn rename(
     State(state): State<AppState>,
-    _user: ApiUser,
-    Path(id): Path<i64>,
+    ApiBand { band, .. }: ApiBand,
+    Path(IdPath { id, .. }): Path<IdPath>,
     Json(req): Json<RenameRequest>,
 ) -> AppResult<Response> {
-    let name = web_clips::set_name(&state, id, &req.name).await?;
+    let name = web_clips::set_name(&state, &band, id, &req.name).await?;
     Ok(Json(RenameResponse { name }).into_response())
 }

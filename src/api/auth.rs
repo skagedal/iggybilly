@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     error::{AppError, AppResult},
     handlers::{account, auth as auth_handlers},
+    models::SessionUser,
     tokens,
     web::{ApiUser, AppState},
 };
@@ -42,6 +43,29 @@ struct Me {
     id: i64,
     username: String,
     is_admin: bool,
+    /// Every band the caller is in, by slug, and which one they were
+    /// last in. The app draws its account screen from these two, and
+    /// names a band in every request it makes rather than relying on
+    /// what the server remembers.
+    bands: Vec<String>,
+    /// `None` for an account in no band — a new user, or Apple's
+    /// reviewer before the test band is ready. The app shows the
+    /// "not in a band" state for it rather than an empty clip list.
+    band: Option<String>,
+}
+
+/// The caller, with their bands. Read on sign-in and on launch, which is
+/// the only place a `Me` goes out — not on any hot path.
+async fn me_for(state: &AppState, user: &SessionUser) -> AppResult<Me> {
+    let bands = crate::queries::bands::for_user(&state.pool, user.id).await?;
+    let band = crate::queries::bands::landing_band(&state.pool, user.id).await?;
+    Ok(Me {
+        id: user.id,
+        username: user.username.clone(),
+        is_admin: user.is_admin,
+        bands: bands.into_iter().map(|b| b.slug).collect(),
+        band: band.map(|b| b.slug),
+    })
 }
 
 /// POST /api/v1/tokens — sign in, and get a token for this device.
@@ -54,11 +78,7 @@ pub async fn create_token(
     Ok(Json(CreateTokenResponse {
         token: issued.secret,
         token_id: issued.id,
-        user: Me {
-            id: user.id,
-            username: user.username,
-            is_admin: user.is_admin,
-        },
+        user: me_for(&state, &user).await?,
     })
     .into_response())
 }
@@ -123,13 +143,35 @@ pub async fn revoke_token(
 
 /// GET /api/v1/me — who the caller is. The app uses it on launch to find
 /// out whether its stored token is still good.
-pub async fn me(ApiUser { user, .. }: ApiUser) -> AppResult<Response> {
-    Ok(Json(Me {
-        id: user.id,
-        username: user.username,
-        is_admin: user.is_admin,
-    })
-    .into_response())
+pub async fn me(
+    State(state): State<AppState>,
+    ApiUser { user, .. }: ApiUser,
+) -> AppResult<Response> {
+    Ok(Json(me_for(&state, &user).await?).into_response())
+}
+
+#[derive(Deserialize)]
+pub struct SwitchBandRequest {
+    /// The slug to be looking at from now on.
+    pub band: String,
+}
+
+/// POST /api/v1/me/band — remember which band the caller is looking at.
+///
+/// Its own endpoint, called when a person switches and by nothing else:
+/// an ordinary read names its band in the path and has no business
+/// moving a preference. A slug the caller is not a member of answers as
+/// one that does not exist.
+pub async fn switch_band(
+    State(state): State<AppState>,
+    ApiUser { user, .. }: ApiUser,
+    Json(req): Json<SwitchBandRequest>,
+) -> AppResult<Response> {
+    let band = crate::queries::bands::resolve_for_member(&state.pool, &req.band, user.id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    crate::queries::bands::set_last_band(&state.pool, user.id, band.id).await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 #[derive(Deserialize)]

@@ -43,21 +43,29 @@ pub fn is_valid(s: &str) -> bool {
     last_char != '-'
 }
 
-/// Resolve a label id to its canonical name, or `None` if there is no
-/// such label.
-pub async fn name_of(pool: &SqlitePool, label_id: i64) -> AppResult<Option<String>> {
-    let row: Option<(String,)> = sqlx::query_as("SELECT name FROM labels WHERE id = ?")
-        .bind(label_id)
-        .fetch_optional(pool)
-        .await?;
+/// Resolve a label id to its canonical name within a band, or `None` if
+/// the band has no such label.
+///
+/// This is where a label id arriving from a client is checked: an id
+/// belonging to another band's label resolves to nothing, so every route
+/// that takes one answers as it would for an id that was never used.
+pub async fn name_of(pool: &SqlitePool, band_id: i64, label_id: i64) -> AppResult<Option<String>> {
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT name FROM labels WHERE id = ? AND band_id = ?")
+            .bind(label_id)
+            .bind(band_id)
+            .fetch_optional(pool)
+            .await?;
     Ok(row.map(|(n,)| n))
 }
 
-/// Resolve a label name to its id and canonical spelling, matching
-/// case-insensitively. `None` when the label has never been used.
-pub async fn find_by_name(pool: &SqlitePool, name: &str) -> AppResult<Option<Label>> {
+/// Resolve a label name to its id and canonical spelling within a band,
+/// matching case-insensitively. `None` when this band has never used it,
+/// whatever another band has.
+pub async fn find_by_name(pool: &SqlitePool, band_id: i64, name: &str) -> AppResult<Option<Label>> {
     let row: Option<(i64, String)> =
-        sqlx::query_as("SELECT id, name FROM labels WHERE name = ? COLLATE NOCASE")
+        sqlx::query_as("SELECT id, name FROM labels WHERE band_id = ? AND name = ? COLLATE NOCASE")
+            .bind(band_id)
             .bind(name)
             .fetch_optional(pool)
             .await?;
@@ -72,17 +80,20 @@ pub async fn find_by_name(pool: &SqlitePool, name: &str) -> AppResult<Option<Lab
 /// last position, or at 0 when it is the label's first clip.
 pub async fn add_to_clip(
     pool: &SqlitePool,
+    band_id: i64,
     clip_id: i64,
     normalised_name: &str,
     added_by: i64,
 ) -> AppResult<()> {
     let mut tx = pool.begin().await?;
-    sqlx::query("INSERT OR IGNORE INTO labels (name) VALUES (?)")
+    sqlx::query("INSERT OR IGNORE INTO labels (name, band_id) VALUES (?, ?)")
         .bind(normalised_name)
+        .bind(band_id)
         .execute(&mut *tx)
         .await?;
-    let label_id: (i64,) = sqlx::query_as("SELECT id FROM labels WHERE name = ?")
+    let label_id: (i64,) = sqlx::query_as("SELECT id FROM labels WHERE name = ? AND band_id = ?")
         .bind(normalised_name)
+        .bind(band_id)
         .fetch_one(&mut *tx)
         .await?;
     sqlx::query(
@@ -104,12 +115,25 @@ pub async fn add_to_clip(
 
 /// Take a label off a clip. The label row itself stays, so its wiki page
 /// and history survive the last clip losing it.
-pub async fn remove_from_clip(pool: &SqlitePool, clip_id: i64, label_id: i64) -> AppResult<()> {
-    sqlx::query("DELETE FROM clip_labels WHERE clip_id = ? AND label_id = ?")
-        .bind(clip_id)
-        .bind(label_id)
-        .execute(pool)
-        .await?;
+///
+/// Scoped by band through the clip, so a member of one band cannot
+/// unlabel another band's clip by naming its id.
+pub async fn remove_from_clip(
+    pool: &SqlitePool,
+    band_id: i64,
+    clip_id: i64,
+    label_id: i64,
+) -> AppResult<()> {
+    sqlx::query(
+        "DELETE FROM clip_labels
+         WHERE clip_id = ? AND label_id = ?
+           AND clip_id IN (SELECT id FROM clips WHERE band_id = ?)",
+    )
+    .bind(clip_id)
+    .bind(label_id)
+    .bind(band_id)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -241,6 +265,7 @@ pub struct Suggestions {
 /// labels a clip already carries.
 pub async fn suggest(
     pool: &SqlitePool,
+    band_id: i64,
     raw_query: &str,
     exclude_clip: Option<i64>,
 ) -> AppResult<Suggestions> {
@@ -248,7 +273,7 @@ pub async fn suggest(
     if trimmed.is_empty() {
         return Ok(Suggestions {
             query: String::new(),
-            matches: recent(pool, exclude_clip).await?,
+            matches: recent(pool, band_id, exclude_clip).await?,
             can_create: false,
         });
     }
@@ -268,19 +293,21 @@ pub async fn suggest(
 
     let matches: Vec<(String,)> = if let Some(clip_id) = exclude_clip {
         sqlx::query_as(
-            "SELECT name FROM labels WHERE name LIKE ? ESCAPE '\\'
+            "SELECT name FROM labels WHERE band_id = ? AND name LIKE ? ESCAPE '\\'
              AND id NOT IN (SELECT label_id FROM clip_labels WHERE clip_id = ?)
              ORDER BY name COLLATE NOCASE LIMIT 10",
         )
+        .bind(band_id)
         .bind(&pattern)
         .bind(clip_id)
         .fetch_all(pool)
         .await?
     } else {
         sqlx::query_as(
-            "SELECT name FROM labels WHERE name LIKE ? ESCAPE '\\'
+            "SELECT name FROM labels WHERE band_id = ? AND name LIKE ? ESCAPE '\\'
              ORDER BY name COLLATE NOCASE LIMIT 10",
         )
+        .bind(band_id)
         .bind(&pattern)
         .fetch_all(pool)
         .await?
@@ -299,18 +326,24 @@ pub async fn suggest(
     })
 }
 
-/// The ten most recently used labels across all clips, optionally
-/// excluding those already on a clip.
-async fn recent(pool: &SqlitePool, exclude_clip: Option<i64>) -> AppResult<Vec<String>> {
+/// The ten most recently used labels across this band's clips,
+/// optionally excluding those already on a clip.
+async fn recent(
+    pool: &SqlitePool,
+    band_id: i64,
+    exclude_clip: Option<i64>,
+) -> AppResult<Vec<String>> {
     let rows: Vec<(String,)> = if let Some(clip_id) = exclude_clip {
         sqlx::query_as(
             "SELECT l.name FROM labels l
              LEFT JOIN clip_labels ct ON ct.label_id = l.id
-             WHERE l.id NOT IN (SELECT label_id FROM clip_labels WHERE clip_id = ?)
+             WHERE l.band_id = ?
+             AND l.id NOT IN (SELECT label_id FROM clip_labels WHERE clip_id = ?)
              GROUP BY l.id
              ORDER BY COALESCE(MAX(ct.added_at), '') DESC, l.name COLLATE NOCASE
              LIMIT 10",
         )
+        .bind(band_id)
         .bind(clip_id)
         .fetch_all(pool)
         .await?
@@ -318,10 +351,12 @@ async fn recent(pool: &SqlitePool, exclude_clip: Option<i64>) -> AppResult<Vec<S
         sqlx::query_as(
             "SELECT l.name FROM labels l
              LEFT JOIN clip_labels ct ON ct.label_id = l.id
+             WHERE l.band_id = ?
              GROUP BY l.id
              ORDER BY COALESCE(MAX(ct.added_at), '') DESC, l.name COLLATE NOCASE
              LIMIT 10",
         )
+        .bind(band_id)
         .fetch_all(pool)
         .await?
     };

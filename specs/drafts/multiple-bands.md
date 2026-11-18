@@ -129,6 +129,7 @@ way — by being on the command line on the server:
     iggybilly list-bands
     iggybilly assign-to-band <username> <slug>
     iggybilly remove-from-band <username> <slug>
+    iggybilly set-band-webhook <slug> [<url>]
 
 `create-band` refuses a slug that is not lower-kebab-case, one that is
 taken, and one that would shadow a path the server already uses.
@@ -155,14 +156,20 @@ belongs, and it will have the use cases to shape it.
 
 ### Discord
 
-The webhook is per band, not per instance, set by the site owner. This
-is not a nicety: one instance-wide webhook would post one band's uploads
-and wiki edits into another band's channel, which is the same leak the
-whole spec exists to prevent, arriving by a side door.
+A band can have its own webhook, set by the site owner with a command.
+Without one it posts to the instance-wide webhook configured today, so
+an instance that has never thought about bands goes on behaving exactly
+as it does now, and a band that wants its own channel gets one by
+asking.
 
-A band without a webhook posts nothing, which is the existing behaviour
-of an instance without one. The links in a post carry the band's slug,
-like every other link.
+Defaulting rather than requiring is the right way round here. The
+webhook is as much a development convenience as a feature, the channel
+it points at is one somebody deliberately chose, and a post carries a
+name and a link rather than a recording. Two bands sharing a channel is
+untidy, not a disclosure. It is still worth being able to separate them,
+which is what the command is for.
+
+The links in a post carry the band's slug, like every other link.
 
 ### The phone app
 
@@ -181,11 +188,6 @@ Switching band while something is playing stops it.
 
 ### Open questions
 
-- The migrated band is called `default`, which is nobody's band name.
-  Renaming it to the band's real slug is a one-line command, and the
-  day to run it is before anyone else is on the instance. Should the
-  migration refuse to leave it at `default` instead — or is the rename
-  simply the first thing on the deploy checklist?
 - Apple's reviewer gets a band with a handful of clips in it. Who
   uploads them, and do they have to be real recordings? A band with
   three clips of a metronome would review fine and gives nothing away.
@@ -198,8 +200,10 @@ Switching band while something is playing stops it.
 
 ### Storing
 
-A band is a row with a slug, a creation time, and its Discord webhook.
-Membership is a user-band pair, and carries nothing else.
+A band is a row with a slug, a creation time, and optionally a Discord
+webhook of its own, which is null for a band that posts to the
+configured default. Membership is a user-band pair, and carries nothing
+else.
 
 Clips and labels each gain the band they belong to. Everything else
 reaches a band through them: a wiki revision through its label, a
@@ -222,14 +226,18 @@ app with the other band's clips.
 ### The migration
 
 A band called `default` is created. Every existing clip, label and user
-becomes its, and the instance's Discord webhook becomes that band's.
-Everyone's last-band is set to it.
+becomes its, and everyone's last-band is set to it.
 
 So the day it ships nothing moves: the same people see the same clips
 under the same labels with the same playlist order, the same posts go to
 the same channel, and the only visible change is `/default/` appearing
-in the address bar. Renaming the band to something the band would
-recognise is a command, run whenever.
+in the address bar.
+
+The band keeps that name until someone changes it. `default` is a
+perfectly working slug, the migration has no opinion about it, and
+nothing anywhere checks whether it has been renamed — the rename is a
+command the site owner runs when it suits them, not a step the deploy
+waits for.
 
 ### Routing
 

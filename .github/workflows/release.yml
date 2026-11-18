@@ -62,6 +62,7 @@ jobs:
     name: Publish the Android APK
     needs: version
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write
     env:
@@ -99,6 +100,7 @@ jobs:
     # `gh variable set IOS_RELEASE --body enabled`.
     if: ${{ vars.IOS_RELEASE == 'enabled' }}
     runs-on: macos-latest
+    environment: release
     env:
       VERSION: ${{ needs.version.outputs.version }}
       BUILD: ${{ needs.version.outputs.build }}

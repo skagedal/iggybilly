@@ -4,7 +4,7 @@ publish_to: 'none'
 version: 0.1.0+1
 
 environment:
-  # The app is pinned to Flutter 3.47.2 in .fvmrc; run it through
+  # The app's Flutter version is pinned in .fvmrc; run it through
   # `fvm flutter`, not a flutter off $PATH.
   sdk: ^3.13.2
 
@@ -50,6 +50,9 @@ dependencies:
   # Handing a clip's original file to the system share sheet, which is
   # how a MIDI file gets from here into GarageBand or a notation app.
   share_plus: ^12.0.2
+
+  # Material widgets, split out of the Flutter SDK as of 3.50.
+  material_ui: ^1.11.1
 
 dev_dependencies:
   flutter_test:

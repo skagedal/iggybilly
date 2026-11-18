@@ -271,7 +271,8 @@ Only the profiles can be made again for free. The keystores and the
 distribution key exist nowhere else, so back the directory up somewhere
 that survives this machine, encrypted; its README says how.
 
-CI holds its own copies as repository secrets. On a new machine, restore
+CI holds its own copies as secrets in the `release` environment, which
+only the release tags may use. On a new machine, restore
 `~/.app-signing`, run `make-ios-signing` to set the iOS ones again, and
 recreate `android/key.properties`, which is not in it.
 `make-release-keystore` refuses once the keystore exists, so by hand, from

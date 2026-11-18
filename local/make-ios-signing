@@ -236,13 +236,13 @@ jq -r '.data.attributes.profileContent' "$response_file" | base64 -d > "$profile
 
 echo "make-ios-signing: setting the GitHub secrets" >&2
 
-base64 < "$bundle" | gh secret set IOS_DIST_CERT_P12_BASE64
-printf '%s' "$bundle_password" | gh secret set IOS_DIST_CERT_PASSWORD
-base64 < "$profile" | gh secret set IOS_PROVISIONING_PROFILE_BASE64
-printf '%s' "$IOS_TEAM" | gh secret set IOS_TEAM_ID
-printf '%s' "$APP_STORE_CONNECT_KEY_ID" | gh secret set APP_STORE_CONNECT_KEY_ID
-printf '%s' "$APP_STORE_CONNECT_ISSUER_ID" | gh secret set APP_STORE_CONNECT_ISSUER_ID
-gh secret set APP_STORE_CONNECT_PRIVATE_KEY < "$key_file"
+base64 < "$bundle" | gh secret set IOS_DIST_CERT_P12_BASE64 --env release
+printf '%s' "$bundle_password" | gh secret set IOS_DIST_CERT_PASSWORD --env release
+base64 < "$profile" | gh secret set IOS_PROVISIONING_PROFILE_BASE64 --env release
+printf '%s' "$IOS_TEAM" | gh secret set IOS_TEAM_ID --env release
+printf '%s' "$APP_STORE_CONNECT_KEY_ID" | gh secret set APP_STORE_CONNECT_KEY_ID --env release
+printf '%s' "$APP_STORE_CONNECT_ISSUER_ID" | gh secret set APP_STORE_CONNECT_ISSUER_ID --env release
+gh secret set APP_STORE_CONNECT_PRIVATE_KEY --env release < "$key_file"
 
 cat >&2 <<MESSAGE
 

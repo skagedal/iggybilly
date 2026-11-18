@@ -8,6 +8,7 @@ import '../format.dart';
 import '../player/player_controller.dart';
 import 'account_page.dart';
 import 'app_scope.dart';
+import 'clip_format.dart';
 import 'clip_page.dart';
 import 'common.dart';
 import 'upload.dart';
@@ -86,7 +87,9 @@ class _ClipsPageState extends State<ClipsPage> {
       final ids = <int, String>{};
       for (final clip in clips) {
         for (final label in clip.labels) {
-          if (_filters.any((f) => f.toLowerCase() == label.name.toLowerCase())) {
+          if (_filters.any(
+            (f) => f.toLowerCase() == label.name.toLowerCase(),
+          )) {
             ids[label.id] = label.name;
           }
         }
@@ -101,9 +104,9 @@ class _ClipsPageState extends State<ClipsPage> {
       if (playlist != null) {
         // A queue playing from this label is this list, so a reload is
         // how it learns of clips that gained or lost the label elsewhere.
-        unawaited(AppScope.of(context)
-            .player
-            .setQueueTracks(playlist.labelName, clips));
+        unawaited(
+          AppScope.of(context).player.setQueueTracks(playlist.labelName, clips),
+        );
       }
       setState(() {
         _clips = clips;
@@ -136,9 +139,9 @@ class _ClipsPageState extends State<ClipsPage> {
   }
 
   Future<void> _openClip(Clip clip) async {
-    final changed = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(builder: (_) => ClipPage(clipId: clip.id)),
-    );
+    final changed = await Navigator.of(
+      context,
+    ).push<bool>(MaterialPageRoute(builder: (_) => ClipPage(clipId: clip.id)));
     // The clip page can rename, relabel or delete; rather than trying to
     // reconcile that here, reload when it says something changed.
     if (changed == true) await _load();
@@ -163,8 +166,11 @@ class _ClipsPageState extends State<ClipsPage> {
     unawaited(player.setQueueTracks(playlist.labelName, to));
 
     try {
-      final order =
-          await session.api.reorderPlaylist(playlist.labelId, clip.id, afterClipId);
+      final order = await session.api.reorderPlaylist(
+        playlist.labelId,
+        clip.id,
+        afterClipId,
+      );
       if (!mounted) return;
       final byId = {for (final c in to) c.id: c};
       final settled = [
@@ -204,9 +210,8 @@ class _ClipsPageState extends State<ClipsPage> {
           IconButton(
             tooltip: 'Account',
             icon: const Icon(Icons.person_outline),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const AccountPage()),
-            ),
+            onPressed: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const AccountPage())),
           ),
         ],
       ),
@@ -215,10 +220,7 @@ class _ClipsPageState extends State<ClipsPage> {
         tooltip: 'Upload clips',
         child: const Icon(Icons.add),
       ),
-      body: RefreshIndicator(
-        onRefresh: _load,
-        child: _body(player),
-      ),
+      body: RefreshIndicator(onRefresh: _load, child: _body(player)),
     );
   }
 
@@ -251,7 +253,9 @@ class _ClipsPageState extends State<ClipsPage> {
             ),
           ),
         for (final wiki in _wikis)
-          SliverToBoxAdapter(child: _WikiCard(page: wiki, onChanged: _load)),
+          SliverToBoxAdapter(
+            child: _WikiCard(page: wiki, onChanged: _load),
+          ),
         if (clips.isEmpty)
           SliverFillRemaining(
             hasScrollBody: false,
@@ -294,7 +298,10 @@ class _ClipsPageState extends State<ClipsPage> {
                   handle: ReorderableDelayedDragStartListener(
                     index: i,
                     child: const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 12,
+                      ),
                       child: Icon(Icons.drag_handle, semanticLabel: 'Reorder'),
                     ),
                   ),
@@ -364,41 +371,74 @@ class _ClipRow extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 IconButton(
-                  tooltip: isPlaying ? 'Pause' : 'Play',
-                  icon: Icon(isPlaying ? Icons.pause_circle : Icons.play_circle,
-                      size: 34),
+                  tooltip: !clip.playable
+                      ? unplayableMessage
+                      : isPlaying
+                      ? 'Pause'
+                      : 'Play',
+                  icon: Icon(
+                    isPlaying ? Icons.pause_circle : Icons.play_circle,
+                    size: 34,
+                  ),
                   color: isLoaded ? theme.colorScheme.primary : null,
-                  onPressed: onPlay ??
-                      () => player.play(
-                            clip,
-                            session.api.resolve(clip.audioPath),
-                            headers: session.api.authHeaders,
-                          ),
+                  onPressed: !clip.playable
+                      ? null
+                      : onPlay ??
+                            () => player.play(
+                              clip,
+                              session.api.resolve(clip.audioPath),
+                              headers: session.api.authHeaders,
+                            ),
                 ),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(
-                        clip.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.titleSmall,
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              clip.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.titleSmall,
+                            ),
+                          ),
+                          if (clip.isMidi) ...[
+                            const SizedBox(width: 6),
+                            FormatBadge(clip: clip),
+                          ],
+                        ],
                       ),
                       const SizedBox(height: 4),
-                      Waveform(
-                        peaks: clip.peaks,
-                        // Only the loaded clip shows a position; the
-                        // rest are pictures of a waveform.
-                        progress: isLoaded ? player.progress : 0,
-                        height: 30,
-                      ),
+                      if (clip.playable)
+                        Waveform(
+                          peaks: clip.peaks,
+                          // Only the loaded clip shows a position; the
+                          // rest are pictures of a waveform.
+                          progress: isLoaded ? player.progress : 0,
+                          height: 30,
+                        )
+                      else
+                        SizedBox(
+                          height: 30,
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              unplayableMessage,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.outline,
+                              ),
+                            ),
+                          ),
+                        ),
                       const SizedBox(height: 4),
                       Text(
                         _subtitle(),
-                        style: theme.textTheme.bodySmall
-                            ?.copyWith(color: theme.colorScheme.outline),
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.outline,
+                        ),
                       ),
                       if (clip.labels.isNotEmpty) ...[
                         const SizedBox(height: 6),
@@ -409,8 +449,11 @@ class _ClipRow extends StatelessWidget {
                             for (final label in clip.labels)
                               _LabelChip(
                                 name: label.name,
-                                active: activeFilters.any((f) =>
-                                    f.toLowerCase() == label.name.toLowerCase()),
+                                active: activeFilters.any(
+                                  (f) =>
+                                      f.toLowerCase() ==
+                                      label.name.toLowerCase(),
+                                ),
                                 onTap: () => onLabelTapped(label.name),
                               ),
                           ],
@@ -468,8 +511,9 @@ class _PlaylistHeading extends StatelessWidget {
               '  ·  ${parts.join(' · ')}',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: theme.colorScheme.outline),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
             ),
           ),
         ],
@@ -479,7 +523,11 @@ class _PlaylistHeading extends StatelessWidget {
 }
 
 class _LabelChip extends StatelessWidget {
-  const _LabelChip({required this.name, required this.active, required this.onTap});
+  const _LabelChip({
+    required this.name,
+    required this.active,
+    required this.onTap,
+  });
 
   final String name;
   final bool active;
@@ -536,8 +584,11 @@ class _WikiCard extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Icon(Icons.article_outlined,
-                      size: 16, color: theme.colorScheme.primary),
+                  Icon(
+                    Icons.article_outlined,
+                    size: 16,
+                    color: theme.colorScheme.primary,
+                  ),
                   const SizedBox(width: 6),
                   Text(page.labelName, style: theme.textTheme.titleSmall),
                 ],

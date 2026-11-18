@@ -55,8 +55,10 @@ class _AccountPageState extends State<AccountPage> {
     );
     if (!sure || !mounted) return;
 
-    final done =
-        await guardDone(context, () => sessionOf(context).api.revokeDevice(device.id));
+    final done = await guardDone(
+      context,
+      () => sessionOf(context).api.revokeDevice(device.id),
+    );
     if (!done || !mounted) return;
     await _load();
   }
@@ -124,7 +126,10 @@ class _AccountPageState extends State<AccountPage> {
             const Divider(),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-              child: Text('Signed-in devices', style: theme.textTheme.titleSmall),
+              child: Text(
+                'Signed-in devices',
+                style: theme.textTheme.titleSmall,
+              ),
             ),
             ..._deviceRows(theme),
             const Divider(),
@@ -149,7 +154,10 @@ class _AccountPageState extends State<AccountPage> {
         if (_error != null)
           Padding(
             padding: const EdgeInsets.all(16),
-            child: Text(_error!, style: TextStyle(color: theme.colorScheme.error)),
+            child: Text(
+              _error!,
+              style: TextStyle(color: theme.colorScheme.error),
+            ),
           )
         else
           const Padding(
@@ -214,10 +222,9 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
       _error = null;
     });
     try {
-      await sessionOf(context).changePassword(
-        currentPassword: _current.text,
-        newPassword: _next.text,
-      );
+      await sessionOf(
+        context,
+      ).changePassword(currentPassword: _current.text, newPassword: _next.text);
       if (mounted) Navigator.of(context).pop(true);
     } on ApiException catch (e) {
       if (!mounted) return;
@@ -253,20 +260,20 @@ class _ChangePasswordDialogState extends State<_ChangePasswordDialog> {
               decoration: const InputDecoration(labelText: 'New password'),
               // The same floor the server enforces, checked here so the
               // answer is immediate rather than a round trip.
-              validator: (v) => (v ?? '').length < 10
-                  ? 'At least 10 characters.'
-                  : null,
+              validator: (v) =>
+                  (v ?? '').length < 10 ? 'At least 10 characters.' : null,
             ),
             const SizedBox(height: 12),
             TextFormField(
               controller: _confirm,
               obscureText: true,
               enabled: !_busy,
-              decoration: const InputDecoration(labelText: 'Repeat new password'),
+              decoration: const InputDecoration(
+                labelText: 'Repeat new password',
+              ),
               // Never sent: matching the two is a typo guard, and the
               // server has no use for the second copy.
-              validator: (v) =>
-                  v != _next.text ? "Those don't match." : null,
+              validator: (v) => v != _next.text ? "Those don't match." : null,
             ),
             if (_error != null) ...[
               const SizedBox(height: 12),

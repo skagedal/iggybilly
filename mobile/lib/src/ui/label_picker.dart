@@ -71,8 +71,7 @@ class _LabelPickerState extends State<_LabelPicker> {
     final generation = ++_generation;
     setState(() => _loading = true);
     try {
-      final result = await sessionOf(context)
-          .api
+      final result = await sessionOf(context).api
           .suggestLabels(query: query, clipId: widget.clipId);
       if (!mounted || generation != _generation) return;
       setState(() {
@@ -141,8 +140,9 @@ class _LabelPickerState extends State<_LabelPicker> {
                       ? 'No labels yet.'
                       : 'Labels are lower-case words joined by single dashes.',
                   textAlign: TextAlign.center,
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: theme.colorScheme.outline),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.outline,
+                  ),
                 ),
               ),
             Flexible(

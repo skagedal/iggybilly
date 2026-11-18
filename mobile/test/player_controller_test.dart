@@ -41,7 +41,10 @@ class FakeEngine implements AudioEngine {
   bool loop = false;
 
   @override
-  Future<Duration?> load(Uri url, {Map<String, String> headers = const {}}) async {
+  Future<Duration?> load(
+    Uri url, {
+    Map<String, String> headers = const {},
+  }) async {
     // Captured on the way in, so that a test can change what the *next*
     // load does while this one is still parked on [gate].
     final held = gate;
@@ -96,21 +99,28 @@ class FakeEngine implements AudioEngine {
   }
 }
 
-Clip clipFixture({int id = 1, String name = 'riff', Duration? duration}) => Clip(
-      id: id,
-      name: name,
-      originalFilename: '$name.mp3',
-      contentType: 'audio/mpeg',
-      uploadedAt: DateTime(2026, 5, 26),
-      recordingDate: null,
-      uploader: 'alice',
-      labels: const [],
-      peaks: null,
-      duration: duration,
-      audioPath: '/clips/$id/audio',
-      downloadPath: '/clips/$id/audio?download=1',
-      canDelete: true,
-    );
+Clip clipFixture({
+  int id = 1,
+  String name = 'riff',
+  Duration? duration,
+  bool midi = false,
+}) => Clip(
+  id: id,
+  name: name,
+  originalFilename: '$name.mp3',
+  contentType: 'audio/mpeg',
+  uploadedAt: DateTime(2026, 5, 26),
+  recordingDate: null,
+  uploader: 'alice',
+  labels: const [],
+  peaks: null,
+  duration: duration,
+  audioPath: '/clips/$id/audio',
+  downloadPath: '/clips/$id/audio?download=1',
+  canDelete: true,
+  format: midi ? 'midi' : 'mp3',
+  playable: !midi,
+);
 
 void main() {
   late FakeEngine engine;
@@ -136,41 +146,49 @@ void main() {
       headers: {'Authorization': 'Bearer tok'},
     );
 
-    expect(engine.loaded.single.toString(),
-        'https://example.test/clips/1/audio');
+    expect(
+      engine.loaded.single.toString(),
+      'https://example.test/clips/1/audio',
+    );
     expect(engine.lastHeaders, {'Authorization': 'Bearer tok'});
     expect(engine.playCalls, 1);
     expect(player.clip!.id, 1);
   });
 
-  test('pressing play on the loaded clip toggles instead of reloading', () async {
-    final clip = clipFixture();
-    final url = Uri.parse('https://example.test/clips/1/audio');
+  test(
+    'pressing play on the loaded clip toggles instead of reloading',
+    () async {
+      final clip = clipFixture();
+      final url = Uri.parse('https://example.test/clips/1/audio');
 
-    // Whether sound is coming out is reported by the engine's stream, not
-    // returned by the call, so each step waits for that to be delivered.
-    await player.play(clip, url);
-    await pumpEventQueue();
-    expect(player.isPlaying, isTrue);
+      // Whether sound is coming out is reported by the engine's stream, not
+      // returned by the call, so each step waits for that to be delivered.
+      await player.play(clip, url);
+      await pumpEventQueue();
+      expect(player.isPlaying, isTrue);
 
-    await player.play(clip, url);
-    await pumpEventQueue();
+      await player.play(clip, url);
+      await pumpEventQueue();
 
-    // The position is what would be lost by reloading, which is why this
-    // rule exists at all.
-    expect(engine.loaded.length, 1, reason: 'not loaded a second time');
-    expect(engine.pauseCalls, 1);
-    expect(player.isPlaying, isFalse);
+      // The position is what would be lost by reloading, which is why this
+      // rule exists at all.
+      expect(engine.loaded.length, 1, reason: 'not loaded a second time');
+      expect(engine.pauseCalls, 1);
+      expect(player.isPlaying, isFalse);
 
-    await player.play(clip, url);
-    await pumpEventQueue();
-    expect(player.isPlaying, isTrue);
-    expect(engine.loaded.length, 1);
-  });
+      await player.play(clip, url);
+      await pumpEventQueue();
+      expect(player.isPlaying, isTrue);
+      expect(engine.loaded.length, 1);
+    },
+  );
 
   test('playing another clip takes the player over', () async {
     await player.play(clipFixture(id: 1), Uri.parse('https://e.test/1'));
-    await player.play(clipFixture(id: 2, name: 'bridge'), Uri.parse('https://e.test/2'));
+    await player.play(
+      clipFixture(id: 2, name: 'bridge'),
+      Uri.parse('https://e.test/2'),
+    );
 
     expect(engine.loaded.length, 2);
     expect(player.clip!.id, 2);
@@ -186,7 +204,10 @@ void main() {
   test("a clip the server couldn't decode still gets a length", () async {
     // No duration from the server, none from load: the platform finds
     // one once it has enough of the stream.
-    await player.play(clipFixture(duration: null), Uri.parse('https://e.test/1'));
+    await player.play(
+      clipFixture(duration: null),
+      Uri.parse('https://e.test/1'),
+    );
     expect(player.duration, isNull);
 
     engine.durationController.add(const Duration(seconds: 42));
@@ -194,16 +215,22 @@ void main() {
     expect(player.duration, const Duration(seconds: 42));
   });
 
-  test('progress is a fraction, and zero while the length is unknown', () async {
-    await player.play(clipFixture(duration: null), Uri.parse('https://e.test/1'));
-    engine.positionController.add(const Duration(seconds: 5));
-    await pumpEventQueue();
-    expect(player.progress, 0, reason: 'nothing to be a fraction of yet');
+  test(
+    'progress is a fraction, and zero while the length is unknown',
+    () async {
+      await player.play(
+        clipFixture(duration: null),
+        Uri.parse('https://e.test/1'),
+      );
+      engine.positionController.add(const Duration(seconds: 5));
+      await pumpEventQueue();
+      expect(player.progress, 0, reason: 'nothing to be a fraction of yet');
 
-    engine.durationController.add(const Duration(seconds: 20));
-    await pumpEventQueue();
-    expect(player.progress, closeTo(0.25, 1e-9));
-  });
+      engine.durationController.add(const Duration(seconds: 20));
+      await pumpEventQueue();
+      expect(player.progress, closeTo(0.25, 1e-9));
+    },
+  );
 
   test('progress never leaves 0..1 even if the position overruns', () async {
     await player.play(
@@ -273,7 +300,10 @@ void main() {
   });
 
   test('renaming the loaded clip updates the caption', () async {
-    await player.play(clipFixture(id: 5, name: 'old'), Uri.parse('https://e.test/5'));
+    await player.play(
+      clipFixture(id: 5, name: 'old'),
+      Uri.parse('https://e.test/5'),
+    );
     player.renamed(5, 'new');
     expect(player.clip!.name, 'new');
 
@@ -298,11 +328,17 @@ void main() {
     final gate = Completer<void>();
     engine.gate = gate;
     engine.loadError = Exception('the platform gave up on this one');
-    final first = player.play(clipFixture(id: 1), Uri.parse('https://e.test/1'));
+    final first = player.play(
+      clipFixture(id: 1),
+      Uri.parse('https://e.test/1'),
+    );
 
     engine.gate = null;
     engine.loadError = null;
-    await player.play(clipFixture(id: 2, name: 'bridge'), Uri.parse('https://e.test/2'));
+    await player.play(
+      clipFixture(id: 2, name: 'bridge'),
+      Uri.parse('https://e.test/2'),
+    );
 
     gate.complete();
     await first;
@@ -315,7 +351,10 @@ void main() {
     final gate = Completer<void>();
     engine.gate = gate;
     engine.reportedDuration = const Duration(seconds: 99);
-    final first = player.play(clipFixture(id: 1), Uri.parse('https://e.test/1'));
+    final first = player.play(
+      clipFixture(id: 1),
+      Uri.parse('https://e.test/1'),
+    );
 
     engine.gate = null;
     engine.reportedDuration = const Duration(seconds: 5);
@@ -329,8 +368,11 @@ void main() {
     await pumpEventQueue();
 
     expect(player.clip?.id, 2);
-    expect(player.duration, const Duration(seconds: 5),
-        reason: "the abandoned clip's length is not this clip's");
+    expect(
+      player.duration,
+      const Duration(seconds: 5),
+      reason: "the abandoned clip's length is not this clip's",
+    );
   });
 
   test('repeat reaches the platform and is remembered', () async {
@@ -430,17 +472,19 @@ void main() {
       await pumpEventQueue();
     }
 
-    test('starts where play was pressed and advances at the end of a clip',
-        () async {
-      await player.playQueue(set, 2, source: 'set', urlFor: urlFor);
-      expect(player.clip!.id, 2);
-      expect(player.queueSource, 'set');
-      expect(player.queueIndex, 1);
+    test(
+      'starts where play was pressed and advances at the end of a clip',
+      () async {
+        await player.playQueue(set, 2, source: 'set', urlFor: urlFor);
+        expect(player.clip!.id, 2);
+        expect(player.queueSource, 'set');
+        expect(player.queueIndex, 1);
 
-      await finish();
-      expect(player.clip!.id, 3);
-      expect(engine.loaded.last.toString(), 'https://e.test/3');
-    });
+        await finish();
+        expect(player.clip!.id, 3);
+        expect(engine.loaded.last.toString(), 'https://e.test/3');
+      },
+    );
 
     test('stops wound back after the last clip when repeat is off', () async {
       await player.playQueue(set, 3, source: 'set', urlFor: urlFor);
@@ -459,41 +503,45 @@ void main() {
       expect(player.clip!.id, 1);
     });
 
-    test('loops a queue of one on the platform, and stops once it grows',
-        () async {
-      await player.setRepeat(true);
-      await player.play(clipFixture(id: 1), urlFor(clipFixture(id: 1)));
-      await pumpEventQueue();
-      expect(engine.loop, isTrue, reason: 'a lone clip loops gaplessly');
+    test(
+      'loops a queue of one on the platform, and stops once it grows',
+      () async {
+        await player.setRepeat(true);
+        await player.play(clipFixture(id: 1), urlFor(clipFixture(id: 1)));
+        await pumpEventQueue();
+        expect(engine.loop, isTrue, reason: 'a lone clip loops gaplessly');
 
-      await player.playQueue([set.first], 1, source: 'set', urlFor: urlFor);
-      await pumpEventQueue();
-      expect(engine.loop, isTrue, reason: 'a playlist of one is a lone clip');
+        await player.playQueue([set.first], 1, source: 'set', urlFor: urlFor);
+        await pumpEventQueue();
+        expect(engine.loop, isTrue, reason: 'a playlist of one is a lone clip');
 
-      await player.setQueueTracks('set', set);
-      expect(engine.loop, isFalse, reason: 'a playlist wraps by advancing');
+        await player.setQueueTracks('set', set);
+        expect(engine.loop, isFalse, reason: 'a playlist wraps by advancing');
 
-      await player.setQueueTracks('set', [set.first]);
-      expect(engine.loop, isTrue);
-    });
+        await player.setQueueTracks('set', [set.first]);
+        expect(engine.loop, isTrue);
+      },
+    );
 
-    test('next and previous move through it; previous late in a clip restarts',
-        () async {
-      await player.playQueue(set, 1, source: 'set', urlFor: urlFor);
-      await player.next();
-      expect(player.clip!.id, 2);
+    test(
+      'next and previous move through it; previous late in a clip restarts',
+      () async {
+        await player.playQueue(set, 1, source: 'set', urlFor: urlFor);
+        await player.next();
+        expect(player.clip!.id, 2);
 
-      engine.positionController.add(const Duration(seconds: 1));
-      await pumpEventQueue();
-      await player.previous();
-      expect(player.clip!.id, 1, reason: 'early in a clip goes back');
+        engine.positionController.add(const Duration(seconds: 1));
+        await pumpEventQueue();
+        await player.previous();
+        expect(player.clip!.id, 1, reason: 'early in a clip goes back');
 
-      engine.positionController.add(const Duration(seconds: 8));
-      await pumpEventQueue();
-      await player.previous();
-      expect(player.clip!.id, 1);
-      expect(engine.lastSeek, Duration.zero, reason: 'late restarts it');
-    });
+        engine.positionController.add(const Duration(seconds: 8));
+        await pumpEventQueue();
+        await player.previous();
+        expect(player.clip!.id, 1);
+        expect(engine.lastSeek, Duration.zero, reason: 'late restarts it');
+      },
+    );
 
     test('next on the last clip wraps only with repeat on', () async {
       await player.playQueue(set, 3, source: 'set', urlFor: urlFor);
@@ -506,18 +554,38 @@ void main() {
       expect(player.clip!.id, 1);
     });
 
-    test('a reorder under a playing queue leaves the playing clip alone',
-        () async {
-      await player.playQueue(set, 2, source: 'set', urlFor: urlFor);
-      final loads = engine.loaded.length;
+    test(
+      'a reorder under a playing queue leaves the playing clip alone',
+      () async {
+        await player.playQueue(set, 2, source: 'set', urlFor: urlFor);
+        final loads = engine.loaded.length;
 
-      await player.setQueueTracks('set', [set[1], set[2], set[0]]);
-      expect(player.clip!.id, 2);
-      expect(player.queueIndex, 0);
-      expect(engine.loaded.length, loads, reason: 'nothing reloads');
+        await player.setQueueTracks('set', [set[1], set[2], set[0]]);
+        expect(player.clip!.id, 2);
+        expect(player.queueIndex, 0);
+        expect(engine.loaded.length, loads, reason: 'nothing reloads');
+
+        await finish();
+        expect(player.clip!.id, 3, reason: 'next is what follows it now');
+      },
+    );
+
+    test('leaves out MIDI files with nothing to play', () async {
+      final mixed = [set[0], clipFixture(id: 9, midi: true), set[1]];
+      await player.playQueue(mixed, 1, source: 'set', urlFor: urlFor);
+      expect(player.queue.map((c) => c.id), [1, 2]);
+
+      await player.setQueueTracks('set', [mixed[1], set[1], set[0]]);
+      expect(player.queue.map((c) => c.id), [2, 1]);
 
       await finish();
-      expect(player.clip!.id, 3, reason: 'next is what follows it now');
+      expect(player.clip!.id, isNot(9));
+    });
+
+    test('will not start a MIDI file with nothing to play', () async {
+      await player.play(clipFixture(id: 9, midi: true), urlFor(set[0]));
+      expect(player.clip, isNull);
+      expect(engine.loaded, isEmpty);
     });
 
     test("another label's reorder does not touch it", () async {

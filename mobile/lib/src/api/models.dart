@@ -10,10 +10,8 @@ library;
 class Label {
   const Label({required this.id, required this.name});
 
-  factory Label.fromJson(Map<String, dynamic> json) => Label(
-        id: json['id'] as int,
-        name: json['name'] as String,
-      );
+  factory Label.fromJson(Map<String, dynamic> json) =>
+      Label(id: json['id'] as int, name: json['name'] as String);
 
   final int id;
   final String name;
@@ -57,7 +55,7 @@ class Playlist {
   final List<Clip> clips;
 }
 
-/// One audio clip.
+/// One clip: a recording, or a MIDI file.
 class Clip {
   const Clip({
     required this.id,
@@ -73,6 +71,8 @@ class Clip {
     required this.audioPath,
     required this.downloadPath,
     required this.canDelete,
+    required this.format,
+    required this.playable,
   });
 
   factory Clip.fromJson(Map<String, dynamic> json) {
@@ -90,16 +90,18 @@ class Clip {
           .map((l) => Label.fromJson(l as Map<String, dynamic>))
           .toList(growable: false),
       peaks: rawPeaks is List
-          ? rawPeaks
-              .map((p) => (p as num).toDouble())
-              .toList(growable: false)
+          ? rawPeaks.map((p) => (p as num).toDouble()).toList(growable: false)
           : null,
       duration: rawDuration is num
           ? Duration(microseconds: (rawDuration * 1000000).round())
           : null,
       audioPath: json['audioUrl'] as String,
-      downloadPath: json['downloadUrl'] as String? ?? json['audioUrl'] as String,
+      downloadPath:
+          json['downloadUrl'] as String? ?? json['audioUrl'] as String,
       canDelete: json['canDelete'] as bool? ?? false,
+      format: json['format'] as String?,
+      // A server from before MIDI files only sends audio.
+      playable: json['playable'] as bool? ?? true,
     );
   }
 
@@ -136,37 +138,51 @@ class Clip {
   /// decides; the app only hides the button.
   final bool canDelete;
 
+  /// As the server detected it from the bytes: "mp4-aac", "mp3", "adts"
+  /// or "midi". Null for a clip the server hasn't looked at yet.
+  final String? format;
+
+  /// False when there is nothing to play: a MIDI file the server hasn't
+  /// rendered. Such a clip is never queued.
+  final bool playable;
+
+  bool get isMidi => format == 'midi';
+
   Clip withLabels(List<Label> replacement) => Clip(
-        id: id,
-        name: name,
-        originalFilename: originalFilename,
-        contentType: contentType,
-        uploadedAt: uploadedAt,
-        recordingDate: recordingDate,
-        uploader: uploader,
-        labels: replacement,
-        peaks: peaks,
-        duration: duration,
-        audioPath: audioPath,
-        downloadPath: downloadPath,
-        canDelete: canDelete,
-      );
+    id: id,
+    name: name,
+    originalFilename: originalFilename,
+    contentType: contentType,
+    uploadedAt: uploadedAt,
+    recordingDate: recordingDate,
+    uploader: uploader,
+    labels: replacement,
+    peaks: peaks,
+    duration: duration,
+    audioPath: audioPath,
+    downloadPath: downloadPath,
+    canDelete: canDelete,
+    format: format,
+    playable: playable,
+  );
 
   Clip withName(String replacement) => Clip(
-        id: id,
-        name: replacement,
-        originalFilename: originalFilename,
-        contentType: contentType,
-        uploadedAt: uploadedAt,
-        recordingDate: recordingDate,
-        uploader: uploader,
-        labels: labels,
-        peaks: peaks,
-        duration: duration,
-        audioPath: audioPath,
-        downloadPath: downloadPath,
-        canDelete: canDelete,
-      );
+    id: id,
+    name: replacement,
+    originalFilename: originalFilename,
+    contentType: contentType,
+    uploadedAt: uploadedAt,
+    recordingDate: recordingDate,
+    uploader: uploader,
+    labels: labels,
+    peaks: peaks,
+    duration: duration,
+    audioPath: audioPath,
+    downloadPath: downloadPath,
+    canDelete: canDelete,
+    format: format,
+    playable: playable,
+  );
 }
 
 /// The signed-in user.
@@ -174,10 +190,10 @@ class User {
   const User({required this.id, required this.username, required this.isAdmin});
 
   factory User.fromJson(Map<String, dynamic> json) => User(
-        id: json['id'] as int,
-        username: json['username'] as String,
-        isAdmin: json['isAdmin'] as bool? ?? false,
-      );
+    id: json['id'] as int,
+    username: json['username'] as String,
+    isAdmin: json['isAdmin'] as bool? ?? false,
+  );
 
   final int id;
   final String username;
@@ -226,12 +242,12 @@ class WikiRevision {
   });
 
   factory WikiRevision.fromJson(Map<String, dynamic> json) => WikiRevision(
-        id: json['id'] as int,
-        author: json['author'] as String,
-        editedAt: DateTime.parse(json['editedAt'] as String).toLocal(),
-        content: json['content'] as String? ?? '',
-        isCurrent: json['isCurrent'] as bool? ?? false,
-      );
+    id: json['id'] as int,
+    author: json['author'] as String,
+    editedAt: DateTime.parse(json['editedAt'] as String).toLocal(),
+    content: json['content'] as String? ?? '',
+    isCurrent: json['isCurrent'] as bool? ?? false,
+  );
 
   final int id;
   final String author;
@@ -263,8 +279,11 @@ class LabelSuggestions {
   final List<String> matches;
   final bool canCreate;
 
-  static const empty =
-      LabelSuggestions(query: '', matches: [], canCreate: false);
+  static const empty = LabelSuggestions(
+    query: '',
+    matches: [],
+    canCreate: false,
+  );
 }
 
 /// One of the user's signed-in devices.
@@ -278,12 +297,12 @@ class Device {
   });
 
   factory Device.fromJson(Map<String, dynamic> json) => Device(
-        id: json['id'] as int,
-        name: json['deviceName'] as String? ?? 'Unnamed device',
-        createdAt: DateTime.parse(json['createdAt'] as String).toLocal(),
-        lastUsedOn: json['lastUsedOn'] as String?,
-        isCurrent: json['isCurrent'] as bool? ?? false,
-      );
+    id: json['id'] as int,
+    name: json['deviceName'] as String? ?? 'Unnamed device',
+    createdAt: DateTime.parse(json['createdAt'] as String).toLocal(),
+    lastUsedOn: json['lastUsedOn'] as String?,
+    isCurrent: json['isCurrent'] as bool? ?? false,
+  );
 
   final int id;
   final String name;
@@ -302,10 +321,8 @@ class Device {
 class UploadedClip {
   const UploadedClip({required this.id, required this.name});
 
-  factory UploadedClip.fromJson(Map<String, dynamic> json) => UploadedClip(
-        id: json['id'] as int,
-        name: json['name'] as String,
-      );
+  factory UploadedClip.fromJson(Map<String, dynamic> json) =>
+      UploadedClip(id: json['id'] as int, name: json['name'] as String);
 
   final int id;
   final String name;

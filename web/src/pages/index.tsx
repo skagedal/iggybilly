@@ -10,6 +10,7 @@ import { Layout } from "../components/Layout";
 import { Waveform } from "../components/Waveform";
 import { WikiPanel } from "../components/WikiPanel";
 import { formatTime } from "../format";
+import { FormatBadge, Unplayable } from "../components/ClipFormat";
 import { trackFor, usePlayer } from "../player";
 import { useRouter } from "../router";
 import type { ClipSummary, IndexProps, PlaylistInfo } from "../types";
@@ -144,12 +145,12 @@ function Uploader() {
         }}
       >
         <label>
-          Audio files
+          Audio or MIDI files
           <input
             ref={inputRef}
             type="file"
             name="audio"
-            accept=".mp3,.m4a,.mp4,.aac,audio/mpeg,audio/mp4,audio/aac"
+            accept=".mp3,.m4a,.mp4,.aac,.mid,.midi,audio/mpeg,audio/mp4,audio/aac,audio/midi,audio/x-midi"
             multiple
             disabled={uploading}
           />
@@ -182,6 +183,10 @@ function moved(
   const at = after ? index + 1 : index;
   return [...rest.slice(0, at), clip, ...rest.slice(at)];
 }
+
+/** A playlist's queue: its rows, less those with nothing to play. */
+const queueOf = (rows: ClipSummary[]) =>
+  rows.filter((row) => row.playable).map(trackFor);
 
 const sameOrder = (a: ClipSummary[], b: ClipSummary[]) =>
   a.length === b.length && a.every((row, i) => row.id === b[i]?.id);
@@ -225,12 +230,12 @@ function Playlist({
   // A queue playing from this label is this list: coming back to it
   // after labels were added elsewhere is how the queue learns of them.
   useEffect(() => {
-    setQueueTracks(label, clips.map(trackFor));
+    setQueueTracks(label, queueOf(clips));
   }, [label, clips, setQueueTracks]);
 
   const show = (next: ClipSummary[]) => {
     setRows(next);
-    setQueueTracks(label, next.map(trackFor));
+    setQueueTracks(label, queueOf(next));
   };
 
   const commit = async (clipId: number, from: ClipSummary[], to: ClipSummary[]) => {
@@ -319,7 +324,7 @@ function Playlist({
           <ClipCard
             key={clip.id}
             clip={clip}
-            onPlay={() => playQueue(rows.map(trackFor), clip.id, label)}
+            onPlay={() => playQueue(queueOf(rows), clip.id, label)}
             dragging={moving?.clipId === clip.id}
             onDragOver={(e) => onDragOver(e, clip.id)}
             // The move is committed on dragend, which follows every drop.
@@ -396,6 +401,7 @@ function ClipCard({
           <a className="clip-name" href={`/clips/${clip.id}`}>
             {clip.name}
           </a>
+          <FormatBadge format={clip.format} />
           <span className="meta">
             {clip.recordingDate !== null && `recorded ${clip.recordingDate} · `}
             uploaded by {clip.uploader} on {clip.uploadedAt}
@@ -403,23 +409,31 @@ function ClipCard({
         </div>
 
         <div className="mini-player">
-          <button
-            type="button"
-            className="play"
-            aria-label={isPlaying ? "Pause" : "Play"}
-            onClick={onPlay ?? (() => player.play(trackFor(clip)))}
-          >
-            {isPlaying ? "⏸" : "▶"}
-          </button>
-          <Waveform
-            peaks={clip.peaks}
-            progress={isCurrent ? player.progress : 0}
-            height={48}
-            onSeek={isCurrent ? player.seek : undefined}
-          />
-          <span className="time">
-            {clip.durationSeconds !== null ? formatTime(clip.durationSeconds) : ""}
-          </span>
+          {clip.playable ? (
+            <>
+              <button
+                type="button"
+                className="play"
+                aria-label={isPlaying ? "Pause" : "Play"}
+                onClick={onPlay ?? (() => player.play(trackFor(clip)))}
+              >
+                {isPlaying ? "⏸" : "▶"}
+              </button>
+              <Waveform
+                peaks={clip.peaks}
+                progress={isCurrent ? player.progress : 0}
+                height={48}
+                onSeek={isCurrent ? player.seek : undefined}
+              />
+              <span className="time">
+                {clip.durationSeconds !== null
+                  ? formatTime(clip.durationSeconds)
+                  : ""}
+              </span>
+            </>
+          ) : (
+            <Unplayable />
+          )}
           <a
             className="download"
             href={`/clips/${clip.id}/audio?download=1`}

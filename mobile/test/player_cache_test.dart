@@ -35,8 +35,7 @@ void main() {
     if (await directory.exists()) await directory.delete(recursive: true);
   });
 
-  test('a clip already on disk plays from the file, not the network',
-      () async {
+  test('a clip already on disk plays from the file, not the network', () async {
     await cache.store(clipFixture(), url);
     server.requests.clear();
 
@@ -48,32 +47,34 @@ void main() {
     expect(player.clip!.id, 1);
   });
 
-  test('a clip that is not on disk streams, and is fetched for next time',
-      () async {
-    server.bodies['/clips/2/audio'] = audioOf(512, fill: 2);
-    final second = Uri.parse('https://example.test/clips/2/audio');
+  test(
+    'a clip that is not on disk streams, and is fetched for next time',
+    () async {
+      server.bodies['/clips/2/audio'] = audioOf(512, fill: 2);
+      final second = Uri.parse('https://example.test/clips/2/audio');
 
-    await player.play(clipFixture(), url, headers: headers);
+      await player.play(clipFixture(), url, headers: headers);
 
-    // The first play does not wait for a download: it streams, as the app
-    // always did.
-    expect(engine.loaded.single, url);
-    expect(engine.lastHeaders, headers);
+      // The first play does not wait for a download: it streams, as the app
+      // always did.
+      expect(engine.loaded.single, url);
+      expect(engine.lastHeaders, headers);
 
-    // The copy is fetched in the background. Asking for it again joins
-    // that download rather than starting a second one, which is how a
-    // test waits for work the player deliberately did not await.
-    await cache.store(clipFixture(), url);
-    expect(cache.hasCopy(url), isTrue);
+      // The copy is fetched in the background. Asking for it again joins
+      // that download rather than starting a second one, which is how a
+      // test waits for work the player deliberately did not await.
+      await cache.store(clipFixture(), url);
+      expect(cache.hasCopy(url), isTrue);
 
-    // And the next play uses it. Via another clip, because pressing play
-    // on the loaded one toggles it instead of reloading.
-    await player.play(clipFixture(id: 2), second);
-    await cache.store(clipFixture(id: 2), second);
-    await player.play(clipFixture(), url, headers: headers);
+      // And the next play uses it. Via another clip, because pressing play
+      // on the loaded one toggles it instead of reloading.
+      await player.play(clipFixture(id: 2), second);
+      await cache.store(clipFixture(id: 2), second);
+      await player.play(clipFixture(), url, headers: headers);
 
-    expect(engine.loaded.last.isScheme('file'), isTrue);
-  });
+      expect(engine.loaded.last.isScheme('file'), isTrue);
+    },
+  );
 
   test('a local copy that will not play falls back to the server', () async {
     await cache.store(clipFixture(), url);

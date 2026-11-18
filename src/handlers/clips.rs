@@ -38,6 +38,10 @@ pub struct ClipRow {
     /// floats per clip just to re-serialise them.
     pub peaks: Option<Box<RawValue>>,
     pub duration_seconds: Option<f64>,
+    /// As detected from the bytes: `midi` is the one the list marks.
+    pub format: Option<String>,
+    /// False for a MIDI file with nothing rendered to play.
+    pub playable: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -99,6 +103,8 @@ fn clip_row(clip: queries::clips::Clip, active: &[&str]) -> ClipRow {
         labels,
         peaks: clip.peaks,
         duration_seconds: clip.duration_seconds,
+        format: clip.format,
+        playable: clip.playable,
     }
 }
 
@@ -238,6 +244,8 @@ struct ClipDetail {
     /// Whether the current user may delete this clip. True only for the
     /// uploader — you can remove your own clips, nobody else's.
     can_delete: bool,
+    format: Option<String>,
+    playable: bool,
 }
 
 #[derive(Serialize)]
@@ -277,6 +285,8 @@ pub async fn detail(
                 peaks: clip.peaks,
                 duration_seconds: clip.duration_seconds,
                 can_delete,
+                format: clip.format,
+                playable: clip.playable,
             },
         },
     )
@@ -379,7 +389,14 @@ pub async fn audio(
         content_type,
         original_filename,
         playback,
+        format,
     } = file_row;
+
+    // A MIDI file with nothing rendered has nothing to stream: a media
+    // element handed the MIDI bytes would only fail to decode them.
+    if q.download.is_none() && !queries::clips::is_playable(format.as_deref(), playback.is_some()) {
+        return Err(AppError::NotFound);
+    }
 
     // Playing streams the playback copy when there is one; Download is
     // always the upload, byte for byte.
@@ -396,10 +413,9 @@ pub async fn audio(
     // server ignores Range and returns the whole body with a 200, which is
     // what this route used to do. A browser's <audio> tolerates it, so the
     // web worked and the app did not.
-    let response = ServeFile::new(&path)
-        .oneshot(request)
-        .await
-        .map_err(|e| AppError::Io(std::io::Error::other(e)))?;
+    // ServeFile's error is Infallible: a missing or unreadable file is a
+    // response, not an error.
+    let Ok(response) = ServeFile::new(&path).oneshot(request).await;
 
     if response.status() == StatusCode::NOT_FOUND {
         // The row exists but its bytes don't.
@@ -529,8 +545,15 @@ pub(crate) async fn ingest(
         // the runtime thread in one hop.
         let audio_dir = state.config.audio_dir.clone();
         let name_for_errors = original_filename.clone();
+        let renderer = state.renderer.clone();
         let stored = tokio::task::spawn_blocking(move || {
-            store_upload(&audio_dir, &stem, &upload_path, &name_for_errors)
+            store_upload(
+                &audio_dir,
+                &stem,
+                &upload_path,
+                &name_for_errors,
+                renderer.as_deref(),
+            )
         })
         .await
         .map_err(|e| AppError::Other(e.into()))??;
@@ -566,7 +589,7 @@ pub(crate) async fn ingest(
             Ok(clip) => uploaded.push(clip),
             Err(e) => {
                 for file in std::iter::once(&stored.storage_filename)
-                    .chain(stored.playback_filename.as_ref())
+                    .chain(stored.prepared.copy.as_ref().map(|c| &c.filename))
                 {
                     let _ = tokio::fs::remove_file(state.config.audio_dir.join(file)).await;
                 }
@@ -577,7 +600,7 @@ pub(crate) async fn ingest(
 
     if uploaded.is_empty() {
         return Err(AppError::BadRequest(
-            "at least one audio file is required".into(),
+            "at least one audio or MIDI file is required".into(),
         ));
     }
     // One Discord post for the whole batch, fire-and-forget.
@@ -601,7 +624,7 @@ struct UploadedClip {
 struct StoredUpload {
     format: crate::audio_format::AudioFormat,
     storage_filename: String,
-    playback_filename: Option<String>,
+    prepared: crate::playback::Prepared,
     recording_date: Option<String>,
     waveform: Option<crate::audio::Waveform>,
 }
@@ -614,6 +637,7 @@ fn store_upload(
     stem: &str,
     upload_path: &Path,
     original_filename: &str,
+    renderer: Option<&crate::midi_render::Renderer>,
 ) -> AppResult<StoredUpload> {
     let format = match crate::audio_format::detect(upload_path) {
         Ok(Ok(format)) => format,
@@ -635,18 +659,24 @@ fn store_upload(
         let _ = std::fs::remove_file(upload_path);
         return Err(AppError::Io(e));
     }
-    let playback_filename = format
-        .needs_playback_copy()
-        .then(|| crate::playback::make_copy(audio_dir, &storage_filename))
-        .flatten();
+    let prepared = crate::playback::prepare(format, audio_dir, &storage_filename, renderer);
 
-    let playable = audio_dir.join(playback_filename.as_ref().unwrap_or(&storage_filename));
+    let playable = match &prepared.copy {
+        Some(copy) => Some(audio_dir.join(&copy.filename)),
+        None if format.is_audio() => Some(audio_dir.join(&storage_filename)),
+        None => None,
+    };
     Ok(StoredUpload {
         format,
         storage_filename,
-        playback_filename,
-        recording_date: extract_recording_date(&playable),
-        waveform: crate::audio::compute(&playable),
+        // A MIDI file carries no recording date, and its rendering's
+        // file dates are just the time of the upload.
+        recording_date: playable
+            .as_ref()
+            .filter(|_| format.is_audio())
+            .and_then(extract_recording_date),
+        waveform: playable.as_deref().and_then(crate::audio::compute),
+        prepared,
     })
 }
 
@@ -714,8 +744,9 @@ async fn insert_with_unique_name(
         let result = sqlx::query(
             "INSERT INTO clips (name, storage_filename, original_filename, content_type,
                                 size_bytes, uploaded_by, recording_date, peaks, duration_seconds,
-                                format, playback_filename, playback_content_type)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                format, playback_filename, playback_content_type,
+                                render_version)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&candidate)
         .bind(&stored.storage_filename)
@@ -727,13 +758,9 @@ async fn insert_with_unique_name(
         .bind(peaks)
         .bind(duration_seconds)
         .bind(stored.format.as_str())
-        .bind(stored.playback_filename.as_deref())
-        .bind(
-            stored
-                .playback_filename
-                .as_ref()
-                .map(|_| crate::playback::PLAYBACK_CONTENT_TYPE),
-        )
+        .bind(stored.prepared.copy.as_ref().map(|c| c.filename.as_str()))
+        .bind(stored.prepared.copy.as_ref().map(|c| c.content_type))
+        .bind(stored.prepared.render_version.as_deref())
         .execute(pool)
         .await;
 

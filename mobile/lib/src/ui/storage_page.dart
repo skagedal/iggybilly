@@ -26,7 +26,8 @@ class StoragePage extends StatelessWidget {
           if (!cache.isUsable) {
             return const EmptyBody(
               icon: Icons.sd_card_alert_outlined,
-              message: 'This phone would not give the app somewhere to keep '
+              message:
+                  'This phone would not give the app somewhere to keep '
                   'clips, so every clip streams.',
             );
           }
@@ -76,18 +77,20 @@ class _Usage extends StatelessWidget {
           Text(
             '${formatBytes(used)} of ${formatBytes(max)} · '
             '${cache.cachedCount} ${cache.cachedCount == 1 ? 'clip' : 'clips'}',
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.colorScheme.outline),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.outline,
+            ),
           ),
           const SizedBox(height: 2),
           Text(
             kept == 0
                 ? 'Nothing kept. Kept clips are stored separately and are not '
-                    'counted here.'
+                      'counted here.'
                 : '${formatBytes(kept)} kept as well, which is not counted '
-                    'against the cache.',
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.colorScheme.outline),
+                      'against the cache.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.outline,
+            ),
           ),
           const SizedBox(height: 10),
           Align(
@@ -106,7 +109,8 @@ class _Usage extends StatelessWidget {
     final sure = await confirm(
       context,
       title: 'Clear the cache?',
-      message: 'Cached clips are downloaded again next time they are '
+      message:
+          'Cached clips are downloaded again next time they are '
           'played. Clips you have kept are left alone.',
       confirmLabel: 'Clear',
     );
@@ -133,8 +137,9 @@ class _MaxSize extends StatelessWidget {
           Text(
             'Once the cache passes this, the clip nobody has played for '
             'longest is deleted.',
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.colorScheme.outline),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.outline,
+            ),
           ),
           const SizedBox(height: 10),
           Wrap(
@@ -187,8 +192,9 @@ class _Kept extends StatelessWidget {
             child: Text(
               'Turn on “Keep downloaded” on a clip and it will play with no '
               'network at all.',
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: theme.colorScheme.outline),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
             ),
           )
         else

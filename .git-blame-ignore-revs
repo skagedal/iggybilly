@@ -1,0 +1,11 @@
+# Revisions to skip when assigning blame. Not used by default; turn it on
+# once per clone with:
+#
+#     git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# Only wholesale reformatting belongs here — a commit in this list is one
+# that changed no behaviour, so that `git blame` points past it to the
+# commit that last changed the code itself.
+
+# mobile: run dart format over lib and test
+40e98f381db04741335da871b02b16a11c2f98a8

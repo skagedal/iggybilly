@@ -26,7 +26,8 @@ Future<String> deviceName() async {
       if (model.isEmpty) return 'Android device';
       // "Google Pixel 8" rather than "Pixel 8" when the brand isn't
       // already the first word of the model.
-      if (brand.isNotEmpty && !model.toLowerCase().startsWith(brand.toLowerCase())) {
+      if (brand.isNotEmpty &&
+          !model.toLowerCase().startsWith(brand.toLowerCase())) {
         return '$brand $model';
       }
       return model;

@@ -23,11 +23,8 @@ Future<void> showPlayerSheet(
     // The sheet is as tall as its contents, but asking for scroll control
     // is what lets it exceed half the screen on a short phone.
     isScrollControlled: true,
-    builder: (_) => PlayerSheet(
-      player: player,
-      cache: scope.cache,
-      onOpenClip: onOpenClip,
-    ),
+    builder: (_) =>
+        PlayerSheet(player: player, cache: scope.cache, onOpenClip: onOpenClip),
   );
 }
 
@@ -76,8 +73,9 @@ class PlayerSheet extends StatelessWidget {
                 Text(
                   _subtitle(clip.uploader, clip.recordingDate),
                   textAlign: TextAlign.center,
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: theme.colorScheme.outline),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.outline,
+                  ),
                 ),
                 const SizedBox(height: 20),
                 Waveform(

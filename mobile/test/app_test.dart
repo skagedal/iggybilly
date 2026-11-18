@@ -16,19 +16,20 @@ import 'player_controller_test.dart' show FakeEngine;
 /// rename or a label going on.
 class FakeServer {
   FakeServer({List<Map<String, dynamic>>? clips})
-      : clips = clips ??
-            [
-              clipJson(
-                id: 1,
-                name: 'riff',
-                labels: [
-                  {'id': 10, 'name': 'verse'}
-                ],
-                peaks: [0.1, 0.9, 0.4],
-                durationSeconds: 12.0,
-              ),
-              clipJson(id: 2, name: 'bridge', uploader: 'bob', canDelete: false),
-            ];
+    : clips =
+          clips ??
+          [
+            clipJson(
+              id: 1,
+              name: 'riff',
+              labels: [
+                {'id': 10, 'name': 'verse'},
+              ],
+              peaks: [0.1, 0.9, 0.4],
+              durationSeconds: 12.0,
+            ),
+            clipJson(id: 2, name: 'bridge', uploader: 'bob', canDelete: false),
+          ];
 
   final List<Map<String, dynamic>> clips;
   final List<http.Request> seen = [];
@@ -59,10 +60,12 @@ class FakeServer {
     ];
   }
 
-  String _labelName(int labelId) => clips
-      .expand((c) => c['labels'] as List)
-      .cast<Map>()
-      .firstWhere((l) => l['id'] == labelId)['name'] as String;
+  String _labelName(int labelId) =>
+      clips
+              .expand((c) => c['labels'] as List)
+              .cast<Map>()
+              .firstWhere((l) => l['id'] == labelId)['name']
+          as String;
 
   http.Response _respond(http.Request request) {
     seen.add(request);
@@ -77,10 +80,16 @@ class FakeServer {
     if (path == '/api/v1/clips') {
       final filters = request.url.queryParametersAll['label'] ?? const [];
       if (filters.isEmpty) return ok(clips);
-      return ok(clips
-          .where((c) => filters.every((f) => (c['labels'] as List)
-              .any((l) => (l as Map)['name'] == f)))
-          .toList());
+      return ok(
+        clips
+            .where(
+              (c) => filters.every(
+                (f) =>
+                    (c['labels'] as List).any((l) => (l as Map)['name'] == f),
+              ),
+            )
+            .toList(),
+      );
     }
 
     final clipMatch = RegExp(r'^/api/v1/clips/(\d+)$').firstMatch(path);
@@ -103,15 +112,18 @@ class FakeServer {
       final id = int.parse(labelMatch.group(1)!);
       final name = (jsonDecode(request.body) as Map)['name'] as String;
       final list = labels.putIfAbsent(
-          id, () => List<Map<String, dynamic>>.from(
-              clips.firstWhere((c) => c['id'] == id)['labels'] as List));
+        id,
+        () => List<Map<String, dynamic>>.from(
+          clips.firstWhere((c) => c['id'] == id)['labels'] as List,
+        ),
+      );
       list.add({'id': 99, 'name': name.toLowerCase()});
       clips.firstWhere((c) => c['id'] == id)['labels'] = list;
       return ok(list);
     }
 
-    final playlistMatch =
-        RegExp(r'^/api/v1/labels/(\d+)/playlist$').firstMatch(path);
+    final playlistMatch = RegExp(r'^/api/v1/labels/(\d+)/playlist$')
+        .firstMatch(path);
     if (playlistMatch != null) {
       final id = int.parse(playlistMatch.group(1)!);
       final carrying = [
@@ -122,7 +134,9 @@ class FakeServer {
         'labelId': id,
         'labelName': _labelName(id),
         'totalSeconds': carrying.fold<double>(
-            0, (sum, c) => sum + ((c['durationSeconds'] as num?) ?? 0)),
+          0,
+          (sum, c) => sum + ((c['durationSeconds'] as num?) ?? 0),
+        ),
         'clips': carrying,
       });
     }
@@ -134,8 +148,10 @@ class FakeServer {
       final body = jsonDecode(request.body) as Map;
       final order = playlistOrder(id)..remove(body['clipId']);
       final after = body['afterClipId'] as int?;
-      order.insert(after == null ? 0 : order.indexOf(after) + 1,
-          body['clipId'] as int);
+      order.insert(
+        after == null ? 0 : order.indexOf(after) + 1,
+        body['clipId'] as int,
+      );
       orders[id] = order;
       return ok({'order': order});
     }
@@ -165,13 +181,13 @@ class FakeServer {
   }
 
   Map<String, dynamic> _wiki(int id, String content) => {
-        'labelId': id,
-        'labelName': 'verse',
-        'content': content,
-        'hasContent': content.isNotEmpty,
-        'lastEditedBy': 'alice',
-        'lastEditedAt': '2026-05-26T10:30:00.000Z',
-      };
+    'labelId': id,
+    'labelName': 'verse',
+    'content': content,
+    'hasContent': content.isNotEmpty,
+    'lastEditedBy': 'alice',
+    'lastEditedAt': '2026-05-26T10:30:00.000Z',
+  };
 }
 
 /// Pump the app with a session wired to [server], already signed in
@@ -198,8 +214,9 @@ Future<FakeEngine> pumpApp(
 }
 
 void main() {
-  testWidgets('a signed-out app asks for a server and a password',
-      (tester) async {
+  testWidgets('a signed-out app asks for a server and a password', (
+    tester,
+  ) async {
     await pumpApp(tester, FakeServer(), signedIn: false);
 
     expect(find.text('Sign in'), findsOneWidget);
@@ -212,9 +229,13 @@ void main() {
     await pumpApp(tester, server, signedIn: false);
 
     await tester.enterText(
-        find.widgetWithText(TextFormField, 'Username'), 'alice');
+      find.widgetWithText(TextFormField, 'Username'),
+      'alice',
+    );
     await tester.enterText(
-        find.widgetWithText(TextFormField, 'Password'), 'passw0rd!');
+      find.widgetWithText(TextFormField, 'Password'),
+      'passw0rd!',
+    );
     await tester.tap(find.widgetWithText(FilledButton, 'Sign in'));
     await tester.pumpAndSettle();
 
@@ -223,23 +244,32 @@ void main() {
     expect(find.text('bridge'), findsOneWidget);
   });
 
-  testWidgets('a wrong password is shown rather than swallowed',
-      (tester) async {
+  testWidgets('a wrong password is shown rather than swallowed', (
+    tester,
+  ) async {
     final server = FakeServer();
-    final client = FakeHttpClient((_) => fails(401, 'Invalid username or password.'));
+    final client = FakeHttpClient(
+      (_) => fails(401, 'Invalid username or password.'),
+    );
     final session = Session(
       store: InMemoryCredentialStore(),
       httpClient: client,
       deviceName: () async => 'Test phone',
       defaultServer: Uri.parse('https://example.test'),
     );
-    await tester.pumpWidget(IggybillyApp(session: session, engine: FakeEngine()));
+    await tester.pumpWidget(
+      IggybillyApp(session: session, engine: FakeEngine()),
+    );
     await tester.pumpAndSettle();
 
     await tester.enterText(
-        find.widgetWithText(TextFormField, 'Username'), 'alice');
+      find.widgetWithText(TextFormField, 'Username'),
+      'alice',
+    );
     await tester.enterText(
-        find.widgetWithText(TextFormField, 'Password'), 'wrong');
+      find.widgetWithText(TextFormField, 'Password'),
+      'wrong',
+    );
     await tester.tap(find.widgetWithText(FilledButton, 'Sign in'));
     await tester.pumpAndSettle();
 
@@ -252,8 +282,9 @@ void main() {
     expect(find.text('riff'), findsOneWidget);
   });
 
-  testWidgets('the player bar appears only once something is playing',
-      (tester) async {
+  testWidgets('the player bar appears only once something is playing', (
+    tester,
+  ) async {
     final server = FakeServer();
     final engine = await pumpApp(tester, server);
 
@@ -264,8 +295,10 @@ void main() {
 
     // The clip was loaded from the right URL, with the token attached:
     // audio is an authenticated endpoint, not a public one.
-    expect(engine.loaded.single.toString(),
-        'https://example.test/clips/1/audio');
+    expect(
+      engine.loaded.single.toString(),
+      'https://example.test/clips/1/audio',
+    );
     expect(engine.lastHeaders['Authorization'], 'Bearer tok');
     expect(engine.playCalls, 1);
   });
@@ -314,8 +347,9 @@ void main() {
     expect(find.text('Keep downloaded'), findsNothing);
   });
 
-  testWidgets('a clip that will not play says so rather than just vanishing',
-      (tester) async {
+  testWidgets('a clip that will not play says so rather than just vanishing', (
+    tester,
+  ) async {
     final server = FakeServer();
     final engine = await pumpApp(tester, server);
     engine.loadError = Exception('the file is not there');
@@ -327,8 +361,9 @@ void main() {
     expect(find.byIcon(Icons.pause), findsNothing, reason: 'no bar for it');
   });
 
-  testWidgets('tapping the bar opens the player, which can repeat',
-      (tester) async {
+  testWidgets('tapping the bar opens the player, which can repeat', (
+    tester,
+  ) async {
     final server = FakeServer();
     final engine = await pumpApp(tester, server);
 
@@ -368,8 +403,7 @@ void main() {
     expect(find.text('Uploaded by'), findsOneWidget);
   });
 
-  testWidgets('the bar survives navigating to a clip and back',
-      (tester) async {
+  testWidgets('the bar survives navigating to a clip and back', (tester) async {
     final server = FakeServer();
     final engine = await pumpApp(tester, server);
 
@@ -387,8 +421,9 @@ void main() {
     expect(engine.stopped, isFalse);
   });
 
-  testWidgets('a clip page shows what it is and who uploaded it',
-      (tester) async {
+  testWidgets('a clip page shows what it is and who uploaded it', (
+    tester,
+  ) async {
     await pumpApp(tester, FakeServer());
     await tester.tap(find.text('riff'));
     await tester.pumpAndSettle();
@@ -410,8 +445,11 @@ void main() {
 
     await tester.tap(find.text('bridge'));
     await tester.pumpAndSettle();
-    expect(find.byIcon(Icons.delete_outline), findsNothing,
-        reason: 'bob uploaded this one');
+    expect(
+      find.byIcon(Icons.delete_outline),
+      findsNothing,
+      reason: 'bob uploaded this one',
+    );
   });
 
   testWidgets('renaming a clip updates the list behind it', (tester) async {
@@ -447,18 +485,20 @@ void main() {
   });
 
   group('a single label', () {
-    FakeServer playlistServer() => FakeServer(clips: [
-          for (final (id, name) in [(1, 'intro'), (2, 'chorus'), (3, 'outro')])
-            clipJson(
-              id: id,
-              name: name,
-              labels: [
-                {'id': 10, 'name': 'set'}
-              ],
-              durationSeconds: 60.0,
-            ),
-          clipJson(id: 4, name: 'jam'),
-        ]);
+    FakeServer playlistServer() => FakeServer(
+      clips: [
+        for (final (id, name) in [(1, 'intro'), (2, 'chorus'), (3, 'outro')])
+          clipJson(
+            id: id,
+            name: name,
+            labels: [
+              {'id': 10, 'name': 'set'},
+            ],
+            durationSeconds: 60.0,
+          ),
+        clipJson(id: 4, name: 'jam'),
+      ],
+    );
 
     Future<void> filterBySet(WidgetTester tester) async {
       await tester.tap(find.text('set').first);
@@ -479,9 +519,9 @@ void main() {
     }
 
     List<String> rowNames(WidgetTester tester) => [
-          for (final name in ['intro', 'chorus', 'outro'])
-            (name, tester.getTopLeft(find.text(name).first).dy),
-        ].sortedByY();
+      for (final name in ['intro', 'chorus', 'outro'])
+        (name, tester.getTopLeft(find.text(name).first).dy),
+    ].sortedByY();
 
     testWidgets('is its playlist, with a heading and handles', (tester) async {
       final server = playlistServer();
@@ -519,7 +559,8 @@ void main() {
       await pumpApp(tester, server);
       await filterBySet(tester);
 
-      final rowHeight = tester.getTopLeft(find.text('chorus')).dy -
+      final rowHeight =
+          tester.getTopLeft(find.text('chorus')).dy -
           tester.getTopLeft(find.text('intro')).dy;
       await dragHandle(tester, 0, rowHeight * 1.6);
 
@@ -528,7 +569,9 @@ void main() {
       const names = {1: 'intro', 2: 'chorus', 3: 'outro'};
       expect(server.orders[10], isNot([1, 2, 3]));
       expect(server.orders[10]!.first, isNot(1));
-      expect(rowNames(tester), [for (final id in server.orders[10]!) names[id]]);
+      expect(rowNames(tester), [
+        for (final id in server.orders[10]!) names[id],
+      ]);
     });
 
     testWidgets('a refused drag springs back and says why', (tester) async {
@@ -536,7 +579,8 @@ void main() {
       await pumpApp(tester, server);
       await filterBySet(tester);
 
-      final rowHeight = tester.getTopLeft(find.text('chorus')).dy -
+      final rowHeight =
+          tester.getTopLeft(find.text('chorus')).dy -
           tester.getTopLeft(find.text('intro')).dy;
       await dragHandle(tester, 0, rowHeight * 1.6);
 
@@ -554,8 +598,10 @@ void main() {
     await tester.pumpAndSettle();
 
     // Rendered from Markdown source, which is what the app is sent.
-    expect(find.textContaining('Two bars, then the turnaround.'),
-        findsOneWidget);
+    expect(
+      find.textContaining('Two bars, then the turnaround.'),
+      findsOneWidget,
+    );
     expect(find.textContaining('edited by alice'), findsOneWidget);
   });
 
@@ -578,8 +624,7 @@ void main() {
     expect(jsonDecode(saved.body), {'content': 'Rewritten.'});
   });
 
-  testWidgets('leaving an edited page asks before discarding',
-      (tester) async {
+  testWidgets('leaving an edited page asks before discarding', (tester) async {
     await pumpApp(tester, FakeServer());
     await tester.tap(find.text('riff'));
     await tester.pumpAndSettle();
@@ -612,7 +657,9 @@ void main() {
       defaultServer: Uri.parse('https://example.test'),
     );
 
-    await tester.pumpWidget(IggybillyApp(session: session, engine: FakeEngine()));
+    await tester.pumpWidget(
+      IggybillyApp(session: session, engine: FakeEngine()),
+    );
     await tester.pumpAndSettle();
     expect(find.text('iggybilly'), findsOneWidget);
 
@@ -624,8 +671,9 @@ void main() {
     expect(store.token, isNull);
   });
 
-  testWidgets('an unreachable server offers a retry rather than a blank page',
-      (tester) async {
+  testWidgets('an unreachable server offers a retry rather than a blank page', (
+    tester,
+  ) async {
     final client = FakeHttpClient((request) {
       if (request.url.path == '/api/v1/me') return ok(userJson());
       throw http.ClientException('offline');
@@ -637,21 +685,25 @@ void main() {
       defaultServer: Uri.parse('https://example.test'),
     );
 
-    await tester.pumpWidget(IggybillyApp(session: session, engine: FakeEngine()));
+    await tester.pumpWidget(
+      IggybillyApp(session: session, engine: FakeEngine()),
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('Try again'), findsOneWidget);
     expect(find.textContaining('https://example.test'), findsOneWidget);
   });
 
-  testWidgets('an empty server says so rather than showing nothing',
-      (tester) async {
+  testWidgets('an empty server says so rather than showing nothing', (
+    tester,
+  ) async {
     await pumpApp(tester, FakeServer(clips: []));
     expect(find.textContaining('No clips yet'), findsOneWidget);
   });
 
-  testWidgets('signing out returns to the sign-in screen and stops playback',
-      (tester) async {
+  testWidgets('signing out returns to the sign-in screen and stops playback', (
+    tester,
+  ) async {
     final server = FakeServer();
     final engine = await pumpApp(tester, server);
 
@@ -666,12 +718,16 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.widgetWithText(FilledButton, 'Sign in'), findsOneWidget);
-    expect(engine.stopped, isTrue,
-        reason: 'audio must not outlive the token that fetched it');
+    expect(
+      engine.stopped,
+      isTrue,
+      reason: 'audio must not outlive the token that fetched it',
+    );
   });
 }
 
 extension on List<(String, double)> {
-  List<String> sortedByY() =>
-      ([...this]..sort((a, b) => a.$2.compareTo(b.$2))).map((e) => e.$1).toList();
+  List<String> sortedByY() => ([
+    ...this,
+  ]..sort((a, b) => a.$2.compareTo(b.$2))).map((e) => e.$1).toList();
 }

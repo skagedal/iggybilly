@@ -338,11 +338,15 @@ every few months is the cost of them keeping the app.
 
 ## Checks
 
+    fvm dart format --output=none --set-exit-if-changed lib test
     fvm flutter analyze
     fvm flutter test
 
-Both run in CI. `analyze` must be clean: fix the lint rather than
-silencing it.
+All three run in CI. `analyze` must be clean: fix the lint rather than
+silencing it, and the formatting is whatever `dart format` produces —
+run it rather than hand-wrapping, so that a change never carries
+reformatting of lines it did not touch. The one commit that reformatted
+the whole app is listed in `../.git-blame-ignore-revs`.
 
 ## How it is put together
 

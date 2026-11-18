@@ -41,7 +41,8 @@ class _WikiHistoryPageState extends State<WikiHistoryPage> {
   Future<void> _load() async {
     setState(() => _error = null);
     try {
-      final revisions = await sessionOf(context).api.wikiHistory(widget.labelId);
+      final revisions = await sessionOf(context).api
+          .wikiHistory(widget.labelId);
       if (!mounted) return;
       setState(() => _revisions = revisions);
     } on ApiException catch (e) {
@@ -58,7 +59,8 @@ class _WikiHistoryPageState extends State<WikiHistoryPage> {
     final sure = await confirm(
       context,
       title: 'Restore this version?',
-      message: 'It is added as a new revision, so the current text is '
+      message:
+          'It is added as a new revision, so the current text is '
           'kept in the history too.',
       confirmLabel: 'Restore',
       destructive: false,
@@ -141,8 +143,9 @@ class _WikiHistoryPageState extends State<WikiHistoryPage> {
               if (revision.content.trim().isEmpty)
                 Text(
                   '(empty)',
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: theme.colorScheme.outline),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.outline,
+                  ),
                 )
               else
                 MarkdownBody(data: revision.content),

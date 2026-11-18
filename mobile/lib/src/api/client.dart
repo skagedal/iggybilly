@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io' show SocketException;
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -39,11 +40,8 @@ class ApiException implements Exception {
 /// comes in by constructor so tests can hand it a fake rather than
 /// standing up a server.
 class IggybillyApi {
-  IggybillyApi({
-    required this.baseUrl,
-    http.Client? httpClient,
-    this.token,
-  }) : _http = httpClient ?? http.Client();
+  IggybillyApi({required this.baseUrl, http.Client? httpClient, this.token})
+    : _http = httpClient ?? http.Client();
 
   /// Origin of the server, with no trailing slash.
   final Uri baseUrl;
@@ -141,7 +139,8 @@ class IggybillyApi {
   }
 
   Future<Clip> clip(int id) async => Clip.fromJson(
-      await _send('GET', '/api/v1/clips/$id') as Map<String, dynamic>);
+    await _send('GET', '/api/v1/clips/$id') as Map<String, dynamic>,
+  );
 
   Future<void> deleteClip(int id) => _send('DELETE', '/api/v1/clips/$id');
 
@@ -162,11 +161,13 @@ class IggybillyApi {
     final request = http.MultipartRequest('POST', resolve('/api/v1/clips'))
       ..headers.addAll(authHeaders);
     for (final file in files) {
-      request.files.add(http.MultipartFile.fromBytes(
-        'audio',
-        file.bytes,
-        filename: file.filename,
-      ));
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          'audio',
+          file.bytes,
+          filename: file.filename,
+        ),
+      );
     }
 
     final http.StreamedResponse streamed;
@@ -185,22 +186,41 @@ class IggybillyApi {
         .toList(growable: false);
   }
 
+  /// The bytes at a clip's `downloadUrl`: the file as it was uploaded.
+  Future<Uint8List> download(String path) async {
+    final http.Response response;
+    try {
+      response = await _http.get(resolve(path), headers: authHeaders);
+    } on SocketException catch (e) {
+      throw ApiException(_networkMessage(e));
+    } on http.ClientException catch (e) {
+      throw ApiException(_networkMessage(e));
+    }
+    if (response.statusCode != 200) {
+      throw ApiException(
+        'The server returned ${response.statusCode}.',
+        statusCode: response.statusCode,
+      );
+    }
+    return response.bodyBytes;
+  }
+
   // -- Labels -------------------------------------------------------------
 
   /// Add a label to a clip. Returns the clip's whole label list, so the
   /// caller replaces its state rather than guessing what the server did
   /// with the name it sent.
-  Future<List<Label>> addLabel(int clipId, String name) async =>
-      _labels(await _send(
-        'POST',
-        '/api/v1/clips/$clipId/labels',
-        body: {'name': name},
-      ));
+  Future<List<Label>> addLabel(int clipId, String name) async => _labels(
+    await _send('POST', '/api/v1/clips/$clipId/labels', body: {'name': name}),
+  );
 
   Future<List<Label>> removeLabel(int clipId, int labelId) async =>
       _labels(await _send('DELETE', '/api/v1/clips/$clipId/labels/$labelId'));
 
-  Future<LabelSuggestions> suggestLabels({String query = '', int? clipId}) async {
+  Future<LabelSuggestions> suggestLabels({
+    String query = '',
+    int? clipId,
+  }) async {
     final params = <MapEntry<String, String>>[
       MapEntry('q', query),
       if (clipId != null) MapEntry('clipId', '$clipId'),
@@ -219,8 +239,9 @@ class IggybillyApi {
 
   /// A label's clips in the order the band has put them in.
   Future<Playlist> playlist(int labelId) async => Playlist.fromJson(
-      await _send('GET', '/api/v1/labels/$labelId/playlist')
-          as Map<String, dynamic>);
+    await _send('GET', '/api/v1/labels/$labelId/playlist')
+        as Map<String, dynamic>,
+  );
 
   /// Move a clip to just after [afterClipId] in a label's playlist, or to
   /// the front when that is null. Returns the label's clip ids in the
@@ -241,19 +262,23 @@ class IggybillyApi {
   // -- Label wiki ---------------------------------------------------------
 
   Future<WikiPage> wiki(int labelId) async => WikiPage.fromJson(
-      await _send('GET', '/api/v1/labels/$labelId/wiki')
-          as Map<String, dynamic>);
+    await _send('GET', '/api/v1/labels/$labelId/wiki') as Map<String, dynamic>,
+  );
 
   Future<WikiPage> saveWiki(int labelId, String content) async =>
-      WikiPage.fromJson(await _send(
-        'POST',
-        '/api/v1/labels/$labelId/wiki',
-        body: {'content': content},
-      ) as Map<String, dynamic>);
+      WikiPage.fromJson(
+        await _send(
+          'POST',
+          '/api/v1/labels/$labelId/wiki',
+          body: {'content': content},
+        ) as Map<String, dynamic>,
+      );
 
   Future<List<WikiRevision>> wikiHistory(int labelId) async {
-    final list = await _send('GET', '/api/v1/labels/$labelId/wiki/history')
-        as List<dynamic>;
+    final list = await _send(
+      'GET',
+      '/api/v1/labels/$labelId/wiki/history',
+    ) as List<dynamic>;
     return list
         .map((r) => WikiRevision.fromJson(r as Map<String, dynamic>))
         .toList(growable: false);
@@ -278,8 +303,10 @@ class IggybillyApi {
       // Built by hand rather than with replace(queryParameters:), which
       // cannot express a key repeated for each active label filter.
       final encoded = query
-          .map((e) =>
-              '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}')
+          .map(
+            (e) =>
+                '${Uri.encodeQueryComponent(e.key)}=${Uri.encodeQueryComponent(e.value)}',
+          )
           .join('&');
       url = url.replace(query: encoded);
     }

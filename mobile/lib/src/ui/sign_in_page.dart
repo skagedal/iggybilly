@@ -63,10 +63,10 @@ class _SignInPageState extends State<SignInPage> {
 
     try {
       await AppScope.of(context).session.signIn(
-            server: server,
-            username: _username.text.trim(),
-            password: _password.text,
-          );
+        server: server,
+        username: _username.text.trim(),
+        password: _password.text,
+      );
       // On success this widget is replaced by the signed-in tree, so
       // there is nothing to set state on.
     } on ApiException catch (e) {
@@ -93,8 +93,11 @@ class _SignInPageState extends State<SignInPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Icon(Icons.graphic_eq,
-                        size: 56, color: theme.colorScheme.primary),
+                    Icon(
+                      Icons.graphic_eq,
+                      size: 56,
+                      color: theme.colorScheme.primary,
+                    ),
                     const SizedBox(height: 12),
                     Text(
                       'iggybilly',
@@ -139,9 +142,11 @@ class _SignInPageState extends State<SignInPage> {
                         suffixIcon: IconButton(
                           onPressed: () =>
                               setState(() => _showPassword = !_showPassword),
-                          icon: Icon(_showPassword
-                              ? Icons.visibility_off_outlined
-                              : Icons.visibility_outlined),
+                          icon: Icon(
+                            _showPassword
+                                ? Icons.visibility_off_outlined
+                                : Icons.visibility_outlined,
+                          ),
                           tooltip: _showPassword ? 'Hide' : 'Show',
                         ),
                       ),
@@ -156,8 +161,9 @@ class _SignInPageState extends State<SignInPage> {
                       const SizedBox(height: 16),
                       Text(
                         _error!,
-                        style: theme.textTheme.bodyMedium
-                            ?.copyWith(color: theme.colorScheme.error),
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.error,
+                        ),
                       ),
                     ],
                     const SizedBox(height: 24),

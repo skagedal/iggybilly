@@ -6,15 +6,10 @@ import 'package:material_ui/material_ui.dart';
 import '../api/client.dart';
 import 'common.dart';
 
-/// Extensions the server accepts. Offered to the picker so a file that
-/// would be refused cannot be chosen in the first place — a rejection
-/// after a slow upload is a bad way to learn the rule.
-const _audioExtensions = [
-  'mp3',
-  'm4a',
-  'mp4',
-  'aac',
-];
+/// Extensions of the formats the server accepts. Offered to the picker
+/// so a file that would be refused cannot be chosen in the first place —
+/// a rejection after a slow upload is a bad way to learn the rule.
+const _audioExtensions = ['mp3', 'm4a', 'mp4', 'aac', 'mid', 'midi'];
 
 /// What the server will take for one clip. Checked here as well so an
 /// oversized file is refused before it is sent rather than after.
@@ -125,20 +120,22 @@ class _UploadingDialogState extends State<_UploadingDialog> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-        content: Row(
-          children: [
-            const SizedBox(
-              height: 20,
-              width: 20,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Text(widget.count == 1
-                  ? 'Uploading 1 clip…'
-                  : 'Uploading ${widget.count} clips…'),
-            ),
-          ],
+    content: Row(
+      children: [
+        const SizedBox(
+          height: 20,
+          width: 20,
+          child: CircularProgressIndicator(strokeWidth: 2),
         ),
-      );
+        const SizedBox(width: 16),
+        Expanded(
+          child: Text(
+            widget.count == 1
+                ? 'Uploading 1 clip…'
+                : 'Uploading ${widget.count} clips…',
+          ),
+        ),
+      ],
+    ),
+  );
 }

@@ -25,11 +25,7 @@ import 'audio_engine.dart';
 /// duration once the platform finds one, and seeking before anything is
 /// loaded does nothing rather than throwing.
 class PlayerController extends ChangeNotifier {
-  PlayerController({
-    required this._engine,
-    this._cache,
-    this._settings,
-  }) {
+  PlayerController({required this._engine, this._cache, this._settings}) {
     _subscriptions.addAll([
       _engine.positions.listen((p) {
         _position = p;
@@ -145,7 +141,12 @@ class PlayerController extends ChangeNotifier {
   /// Load a clip as a queue of one and start it — or, if it is already
   /// the loaded one, toggle it, so pressing play twice does not lose your
   /// place.
-  Future<void> play(Clip clip, Uri url, {Map<String, String> headers = const {}}) async {
+  Future<void> play(
+    Clip clip,
+    Uri url, {
+    Map<String, String> headers = const {},
+  }) async {
+    if (!clip.playable) return;
     if (_clip?.id == clip.id) {
       await toggle();
       return;
@@ -167,10 +168,11 @@ class PlayerController extends ChangeNotifier {
     required Uri Function(Clip clip) urlFor,
     Map<String, String> headers = const {},
   }) async {
-    final target = clips.where((c) => c.id == clipId).firstOrNull;
+    final playable = clips.where((c) => c.playable).toList();
+    final target = playable.where((c) => c.id == clipId).firstOrNull;
     if (target == null) return;
     _source = source;
-    _tracks = List.unmodifiable(clips);
+    _tracks = List.unmodifiable(playable);
     _resumeAt = null;
     _urlFor = urlFor;
     _headers = headers;
@@ -186,10 +188,11 @@ class PlayerController extends ChangeNotifier {
   /// Replace what is queued without touching what is playing — if the
   /// queue is the playlist of [source], and otherwise nothing. How a
   /// reorder, or a label going on or coming off, reaches the queue.
-  Future<void> setQueueTracks(String source, List<Clip> clips) async {
+  Future<void> setQueueTracks(String source, List<Clip> all) async {
     if (_source == null || _source!.toLowerCase() != source.toLowerCase()) {
       return;
     }
+    final clips = all.where((c) => c.playable).toList();
     final current = _clip?.id;
     final kept = {for (final c in clips) c.id};
     final index = queueIndex;
@@ -391,9 +394,7 @@ class PlayerController extends ChangeNotifier {
   /// Keep the bar's caption honest when the loaded clip is renamed.
   void renamed(int clipId, String name) {
     final current = _clip;
-    _tracks = [
-      for (final c in _tracks) c.id == clipId ? c.withName(name) : c,
-    ];
+    _tracks = [for (final c in _tracks) c.id == clipId ? c.withName(name) : c];
     if (current == null || current.id != clipId) {
       notifyListeners();
       return;

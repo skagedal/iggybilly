@@ -1,7 +1,8 @@
 //! What an uploaded file actually is, judged by its bytes, and making a
 //! playable copy of the formats some client can't play as stored.
 //!
-//! See `specs/implemented/003-audio-formats.md`. The extension and the uploader's
+//! See `specs/implemented/003-audio-formats.md` and
+//! `specs/implemented/004-midi-files.md`. The extension and the uploader's
 //! Content-Type play no part: phones misname files, and the served type
 //! has to match the bytes or Safari and AVPlayer refuse them.
 
@@ -25,6 +26,9 @@ pub enum AudioFormat {
     Mp4Aac,
     Mp3,
     Adts,
+    /// A Standard MIDI File, type 0 or 1. Not audio, but stored and
+    /// listed as a clip all the same.
+    Midi,
 }
 
 impl AudioFormat {
@@ -33,6 +37,7 @@ impl AudioFormat {
             AudioFormat::Mp4Aac => "audio/mp4",
             AudioFormat::Mp3 => "audio/mpeg",
             AudioFormat::Adts => "audio/aac",
+            AudioFormat::Midi => "audio/midi",
         }
     }
 
@@ -41,6 +46,7 @@ impl AudioFormat {
             AudioFormat::Mp4Aac => "m4a",
             AudioFormat::Mp3 => "mp3",
             AudioFormat::Adts => "aac",
+            AudioFormat::Midi => "mid",
         }
     }
 
@@ -50,7 +56,13 @@ impl AudioFormat {
             AudioFormat::Mp4Aac => "mp4-aac",
             AudioFormat::Mp3 => "mp3",
             AudioFormat::Adts => "adts",
+            AudioFormat::Midi => "midi",
         }
+    }
+
+    /// Whether the stored file is something a media player decodes.
+    pub fn is_audio(self) -> bool {
+        self != AudioFormat::Midi
     }
 
     /// Whether every client can play the file as stored. The ones that
@@ -73,6 +85,12 @@ pub enum Unsupported {
     Amr,
     Mp4Alac,
     Mp4NoAac,
+    /// MIDI with several independent sequences in one file.
+    MidiType2,
+    /// MIDI wrapped in a RIFF container.
+    Rmid,
+    /// Starts like a Standard MIDI File but doesn't parse as one.
+    MidiUnreadable,
     Unknown,
 }
 
@@ -88,22 +106,27 @@ impl Unsupported {
             Unsupported::Amr => "AMR",
             Unsupported::Mp4Alac => "MP4 with Apple Lossless (ALAC) audio",
             Unsupported::Mp4NoAac => "MP4 without AAC audio",
-            Unsupported::Unknown => return None,
+            Unsupported::MidiType2 => "a MIDI file with several independent sequences (type 2)",
+            Unsupported::Rmid => "a MIDI file in a RIFF container (RMID)",
+            Unsupported::MidiUnreadable | Unsupported::Unknown => return None,
         })
     }
 }
 
 impl fmt::Display for Unsupported {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.description() {
-            Some(d) => write!(
+        match (self, self.description()) {
+            (_, Some(d)) => write!(
                 f,
                 "This file is {d}, which we don't support at the moment. \
                  Talk to Simon if you want to change this."
             )?,
-            None => write!(f, "This isn't an audio file we recognise.")?,
+            (Unsupported::MidiUnreadable, None) => {
+                write!(f, "This looks like a MIDI file, but it couldn't be read.")?
+            }
+            (_, None) => write!(f, "This isn't an audio file we recognise.")?,
         }
-        write!(f, " Upload MP3, M4A or AAC.")
+        write!(f, " Upload MP3, M4A, AAC or MIDI.")
     }
 }
 
@@ -111,6 +134,7 @@ impl fmt::Display for Unsupported {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Sniffed {
     Mp4,
+    Midi,
     Accepted(AudioFormat),
     Refused(Unsupported),
 }
@@ -122,7 +146,21 @@ pub fn detect(path: &Path) -> std::io::Result<Result<AudioFormat, Unsupported>> 
         Sniffed::Accepted(f) => Ok(f),
         Sniffed::Refused(u) => Err(u),
         Sniffed::Mp4 => mp4_codec(path),
+        Sniffed::Midi => midi_kind(&std::fs::read(path)?),
     })
+}
+
+/// Parse the whole file, not just its header, so a file that only starts
+/// like MIDI is refused at upload. Uploads are capped at 10 MB and MIDI
+/// files are a few hundred kilobytes, so reading it all is cheap.
+fn midi_kind(bytes: &[u8]) -> Result<AudioFormat, Unsupported> {
+    let Ok(smf) = midly::Smf::parse(bytes) else {
+        return Err(Unsupported::MidiUnreadable);
+    };
+    match smf.header.format {
+        midly::Format::SingleTrack | midly::Format::Parallel => Ok(AudioFormat::Midi),
+        midly::Format::Sequential => Err(Unsupported::MidiType2),
+    }
 }
 
 fn read_head(path: &Path) -> std::io::Result<Vec<u8>> {
@@ -178,6 +216,12 @@ fn sniff(head: &[u8]) -> Sniffed {
     }
     if head.len() >= 12 && &head[0..4] == b"RIFF" && &head[8..12] == b"WAVE" {
         return Sniffed::Refused(Unsupported::Wav);
+    }
+    if head.len() >= 12 && &head[0..4] == b"RIFF" && &head[8..12] == b"RMID" {
+        return Sniffed::Refused(Unsupported::Rmid);
+    }
+    if head.starts_with(b"MThd") {
+        return Sniffed::Midi;
     }
     if head.starts_with(b"fLaC") {
         return Sniffed::Refused(Unsupported::Flac);
@@ -652,6 +696,10 @@ mod tests {
             ("clip.webm", Err(Unsupported::WebM)),
             ("clip.wav", Err(Unsupported::Wav)),
             ("clip.flac", Err(Unsupported::Flac)),
+            ("../midi/groove.mid", Ok(AudioFormat::Midi)),
+            ("../midi/riff.mid", Ok(AudioFormat::Midi)),
+            ("../midi/sequences.mid", Err(Unsupported::MidiType2)),
+            ("../midi/groove.rmi", Err(Unsupported::Rmid)),
         ];
         for (name, want) in cases {
             assert_eq!(detect(&fixture(name)).unwrap(), want, "{name}");
@@ -687,11 +735,19 @@ mod tests {
         assert_eq!(
             Unsupported::OggVorbis.to_string(),
             "This file is Ogg Vorbis, which we don't support at the moment. \
-             Talk to Simon if you want to change this. Upload MP3, M4A or AAC."
+             Talk to Simon if you want to change this. Upload MP3, M4A, AAC or MIDI."
         );
         assert_eq!(
             Unsupported::Unknown.to_string(),
-            "This isn't an audio file we recognise. Upload MP3, M4A or AAC."
+            "This isn't an audio file we recognise. Upload MP3, M4A, AAC or MIDI."
+        );
+    }
+
+    #[test]
+    fn a_midi_header_alone_is_not_midi() {
+        assert_eq!(
+            midi_kind(b"MThd\0\0\0\x06"),
+            Err(Unsupported::MidiUnreadable)
         );
     }
 

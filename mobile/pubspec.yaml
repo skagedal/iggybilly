@@ -47,6 +47,10 @@ dependencies:
   # transitively, because the cache uses it.
   path: ^1.9.0
 
+  # Handing a clip's original file to the system share sheet, which is
+  # how a MIDI file gets from here into GarageBand or a notation app.
+  share_plus: ^12.0.2
+
   # Material widgets, split out of the Flutter SDK as of 3.50.
   material_ui: ^1.11.1
 

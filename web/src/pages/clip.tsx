@@ -1,6 +1,11 @@
 import { useState } from "react";
 
 import { ApiError, api } from "../api";
+import {
+  FormatBadge,
+  RenderingNote,
+  Unplayable,
+} from "../components/ClipFormat";
 import { LabelInput } from "../components/LabelInput";
 import { Layout } from "../components/Layout";
 import { Waveform } from "../components/Waveform";
@@ -18,6 +23,8 @@ export default function ClipPage({ username, clip }: ClipProps) {
   // or shrinks to match.
   const labelsChanged = (next: ClipLabel[]) => {
     setLabels(next);
+    // Never queued, so there's nothing to grow or shrink.
+    if (!clip.playable) return;
     player.syncLabels(
       trackFor({ ...clip, name }),
       next.map((label) => label.name),
@@ -34,7 +41,12 @@ export default function ClipPage({ username, clip }: ClipProps) {
   return (
     <Layout username={username} nav={nav}>
       <section>
-        <ClipHeader clipId={clip.id} name={name} onRenamed={setName} />
+        <ClipHeader
+          clipId={clip.id}
+          name={name}
+          format={clip.format}
+          onRenamed={setName}
+        />
 
         <p className="meta">
           {clip.recordingDate !== null && (
@@ -64,10 +76,12 @@ export default function ClipPage({ username, clip }: ClipProps) {
 function ClipHeader({
   clipId,
   name,
+  format,
   onRenamed,
 }: {
   clipId: number;
   name: string;
+  format: string | null;
   onRenamed: (name: string) => void;
 }) {
   const player = usePlayer();
@@ -99,6 +113,7 @@ function ClipHeader({
     return (
       <div className="clip-header">
         <h1>{name}</h1>
+        <FormatBadge format={format} />
         <button
           type="button"
           className="rename-btn"
@@ -155,6 +170,21 @@ function Player({ clip }: { clip: ClipDetail }) {
   const isCurrent = player.track?.clipId === clip.id;
   const isPlaying = isCurrent && player.isPlaying;
 
+  if (!clip.playable) {
+    return (
+      <div className="player-controls">
+        <Unplayable />
+        <a
+          className="download"
+          href={`/clips/${clip.id}/audio?download=1`}
+          download={clip.originalFilename}
+        >
+          Download
+        </a>
+      </div>
+    );
+  }
+
   return (
     <>
       <div className="clip-waveform">
@@ -184,6 +214,7 @@ function Player({ clip }: { clip: ClipDetail }) {
           Download
         </a>
       </div>
+      <RenderingNote format={clip.format} />
     </>
   );
 }

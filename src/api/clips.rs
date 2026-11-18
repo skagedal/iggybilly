@@ -55,15 +55,38 @@ pub struct Clip {
     /// Whether the caller may delete this clip: only its uploader may.
     /// Sent on every clip so the app never has to re-derive the rule.
     can_delete: bool,
+    /// As detected from the upload's bytes: `mp4-aac`, `mp3`, `adts` or
+    /// `midi`. Null until the server has looked at an old clip.
+    format: Option<String>,
+    /// False when `audio_url` has nothing to play: a MIDI file with no
+    /// rendered copy. `audio_url` is still sent, and answers 404, because
+    /// installed apps expect a string there and already handle a clip
+    /// that fails to load.
+    playable: bool,
+}
+
+/// The `v` in a clip's audio URL, which names the file it streams. A
+/// playback copy's name begins with the same stem as its upload, so a
+/// copy gets a hash of its whole name instead: gaining a copy, or a new
+/// rendering of one, then changes the URL.
+fn audio_version(c: &queries::clips::Clip) -> String {
+    if c.has_playback_copy {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(c.playback_filename.as_bytes())[..4]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    } else {
+        c.playback_filename
+            .get(..8)
+            .unwrap_or(&c.playback_filename)
+            .to_owned()
+    }
 }
 
 pub(super) fn clip(c: queries::clips::Clip, viewer_id: i64) -> Clip {
     Clip {
-        audio_url: format!(
-            "/clips/{}/audio?v={}",
-            c.id,
-            c.playback_filename.get(..8).unwrap_or(&c.playback_filename)
-        ),
+        audio_url: format!("/clips/{}/audio?v={}", c.id, audio_version(&c)),
         download_url: format!("/clips/{}/audio?download=1", c.id),
         can_delete: c.uploaded_by == viewer_id,
         id: c.id,
@@ -83,6 +106,8 @@ pub(super) fn clip(c: queries::clips::Clip, viewer_id: i64) -> Clip {
             .collect(),
         peaks: c.peaks,
         duration_seconds: c.duration_seconds,
+        format: c.format,
+        playable: c.playable,
     }
 }
 

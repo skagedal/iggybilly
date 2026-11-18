@@ -25,11 +25,7 @@ import 'audio_engine.dart';
 /// duration once the platform finds one, and seeking before anything is
 /// loaded does nothing rather than throwing.
 class PlayerController extends ChangeNotifier {
-  PlayerController({
-    required this._engine,
-    this._cache,
-    this._settings,
-  }) {
+  PlayerController({required this._engine, this._cache, this._settings}) {
     _subscriptions.addAll([
       _engine.positions.listen((p) {
         _position = p;
@@ -145,7 +141,11 @@ class PlayerController extends ChangeNotifier {
   /// Load a clip as a queue of one and start it — or, if it is already
   /// the loaded one, toggle it, so pressing play twice does not lose your
   /// place.
-  Future<void> play(Clip clip, Uri url, {Map<String, String> headers = const {}}) async {
+  Future<void> play(
+    Clip clip,
+    Uri url, {
+    Map<String, String> headers = const {},
+  }) async {
     if (!clip.playable) return;
     if (_clip?.id == clip.id) {
       await toggle();
@@ -394,9 +394,7 @@ class PlayerController extends ChangeNotifier {
   /// Keep the bar's caption honest when the loaded clip is renamed.
   void renamed(int clipId, String name) {
     final current = _clip;
-    _tracks = [
-      for (final c in _tracks) c.id == clipId ? c.withName(name) : c,
-    ];
+    _tracks = [for (final c in _tracks) c.id == clipId ? c.withName(name) : c];
     if (current == null || current.id != clipId) {
       notifyListeners();
       return;

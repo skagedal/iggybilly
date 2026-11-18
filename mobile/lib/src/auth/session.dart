@@ -33,8 +33,8 @@ class Session extends ChangeNotifier {
     this._httpClient,
     Future<String> Function()? deviceName,
     Uri? defaultServer,
-  })  : _deviceName = deviceName ?? _unnamedDevice,
-        _defaultServer = defaultServer ?? Uri.parse(_fallbackServer);
+  }) : _deviceName = deviceName ?? _unnamedDevice,
+       _defaultServer = defaultServer ?? Uri.parse(_fallbackServer);
 
   /// What a device calls itself when nothing asked the platform. Only
   /// reached in tests; the app passes the real device name in.

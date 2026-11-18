@@ -120,7 +120,10 @@ class _WaveformPainter extends CustomPainter {
       // sampling one: a transient that lands between samples would
       // otherwise disappear, and a drum hit is the thing you look for.
       final from = (i * source.length / bars).floor();
-      final to = (((i + 1) * source.length) / bars).ceil().clamp(from + 1, source.length);
+      final to = (((i + 1) * source.length) / bars).ceil().clamp(
+        from + 1,
+        source.length,
+      );
       var peak = 0.0;
       for (var j = from; j < to; j++) {
         final v = source[j].abs();
@@ -131,7 +134,11 @@ class _WaveformPainter extends CustomPainter {
       // A floor of one pixel, so silence is a line rather than a gap.
       final half = (peak.clamp(0.0, 1.0) * middle).clamp(0.5, middle);
       paint.color = x <= playedUpTo ? playedColor : unplayedColor;
-      canvas.drawLine(Offset(x, middle - half), Offset(x, middle + half), paint);
+      canvas.drawLine(
+        Offset(x, middle - half),
+        Offset(x, middle + half),
+        paint,
+      );
     }
   }
 

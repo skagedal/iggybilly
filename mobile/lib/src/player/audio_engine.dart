@@ -58,7 +58,10 @@ class JustAudioEngine implements AudioEngine {
   bool _resumeAfterInterruption = false;
 
   @override
-  Future<Duration?> load(Uri url, {Map<String, String> headers = const {}}) async {
+  Future<Duration?> load(
+    Uri url, {
+    Map<String, String> headers = const {},
+  }) async {
     await _configureSession();
     // The bearer token rides on the request the platform player makes:
     // audio is a normal authenticated endpoint, not a public URL with a
@@ -167,8 +170,9 @@ class JustAudioEngine implements AudioEngine {
   Stream<Duration?> get durations => _player.durationStream;
 
   @override
-  Stream<void> get completions => _player.processingStateStream
-      .where((state) => state == ProcessingState.completed);
+  Stream<void> get completions => _player.processingStateStream.where(
+    (state) => state == ProcessingState.completed,
+  );
 
   @override
   Future<void> dispose() async {

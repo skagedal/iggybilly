@@ -31,11 +31,8 @@ class PlayerBar extends StatelessWidget {
 
         final theme = Theme.of(context);
         final total = player.duration;
-        void open() => showPlayerSheet(
-              context,
-              player: player,
-              onOpenClip: onOpenClip,
-            );
+        void open() =>
+            showPlayerSheet(context, player: player, onOpenClip: onOpenClip);
         return Material(
           color: theme.colorScheme.surfaceContainerHigh,
           child: SafeArea(

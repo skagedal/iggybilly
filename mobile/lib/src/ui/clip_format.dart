@@ -8,7 +8,8 @@ const unplayableMessage = "This MIDI file can't be played here.";
 
 /// Under a MIDI clip's player, since it isn't what the file's author
 /// heard.
-const renderingNote = 'Played with a general-purpose instrument set. '
+const renderingNote =
+    'Played with a general-purpose instrument set. '
     'It will sound different in your own setup.';
 
 /// Marks a clip that isn't a recording, so nobody presses play expecting

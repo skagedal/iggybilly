@@ -24,11 +24,9 @@ import '../api/models.dart';
 /// stream from the server, which is what the app did before this class
 /// existed. None of them is allowed to stop a clip playing.
 class TrackCache extends ChangeNotifier {
-  TrackCache({
-    required this._locate,
-    http.Client? httpClient,
-  })  : _http = httpClient ?? http.Client(),
-        _ownsHttp = httpClient == null;
+  TrackCache({required this._locate, http.Client? httpClient})
+    : _http = httpClient ?? http.Client(),
+      _ownsHttp = httpClient == null;
 
   /// The default ceiling, 500 MB. The server caps a clip at 10 MB, so
   /// this is a few hundred of them — more than a band's working set, and
@@ -108,11 +106,11 @@ class TrackCache extends ChangeNotifier {
   /// beside the entry rather than in its key, so a clip that gains a
   /// playback copy keeps its place and its "keep downloaded".
   static String keyFor(Uri url) => Uri(
-        scheme: url.scheme,
-        host: url.host,
-        port: url.hasPort ? url.port : null,
-        path: url.path,
-      ).toString();
+    scheme: url.scheme,
+    host: url.host,
+    port: url.hasPort ? url.port : null,
+    path: url.path,
+  ).toString();
 
   static String? _versionOf(Uri url) => url.queryParameters['v'];
 
@@ -498,10 +496,11 @@ class TrackCache extends ChangeNotifier {
     var used = usedBytes;
     if (used <= _maxBytes) return;
 
-    final candidates = _entries.values
-        .where((entry) => !entry.kept && entry.key != protect)
-        .toList()
-      ..sort((a, b) => a.playedAt.compareTo(b.playedAt));
+    final candidates =
+        _entries.values
+            .where((entry) => !entry.kept && entry.key != protect)
+            .toList()
+          ..sort((a, b) => a.playedAt.compareTo(b.playedAt));
 
     for (final entry in candidates) {
       if (used <= _maxBytes) break;
@@ -549,13 +548,13 @@ class TrackCache extends ChangeNotifier {
       .fold(0, (total, entry) => total + entry.bytes);
 
   CachedTrack _track(_Entry entry) => CachedTrack(
-        key: entry.key,
-        clipId: entry.clipId,
-        name: entry.name,
-        bytes: entry.bytes,
-        lastPlayedAt: entry.playedAt.toLocal(),
-        isKept: entry.kept,
-      );
+    key: entry.key,
+    clipId: entry.clipId,
+    name: entry.name,
+    bytes: entry.bytes,
+    lastPlayedAt: entry.playedAt.toLocal(),
+    isKept: entry.kept,
+  );
 }
 
 /// One clip on disk, as the storage screen shows it.
@@ -601,7 +600,10 @@ class _Entry {
     final file = json['file'];
     final bytes = json['bytes'];
     final playedAt = DateTime.tryParse(json['playedAt'] as String? ?? '');
-    if (key is! String || file is! String || bytes is! int || playedAt == null) {
+    if (key is! String ||
+        file is! String ||
+        bytes is! int ||
+        playedAt == null) {
       return null;
     }
     return _Entry(
@@ -631,35 +633,35 @@ class _Entry {
   final bool kept;
 
   _Entry playedNow(String currentName) => _Entry(
-        key: key,
-        clipId: clipId,
-        name: currentName,
-        file: file,
-        version: version,
-        bytes: bytes,
-        playedAt: DateTime.now().toUtc(),
-        kept: kept,
-      );
+    key: key,
+    clipId: clipId,
+    name: currentName,
+    file: file,
+    version: version,
+    bytes: bytes,
+    playedAt: DateTime.now().toUtc(),
+    kept: kept,
+  );
 
   _Entry withKept(bool value) => _Entry(
-        key: key,
-        clipId: clipId,
-        name: name,
-        file: file,
-        version: version,
-        bytes: bytes,
-        playedAt: playedAt,
-        kept: value,
-      );
+    key: key,
+    clipId: clipId,
+    name: name,
+    file: file,
+    version: version,
+    bytes: bytes,
+    playedAt: playedAt,
+    kept: value,
+  );
 
   Map<String, dynamic> toJson() => {
-        'key': key,
-        'clipId': clipId,
-        'name': name,
-        'file': file,
-        if (version != null) 'version': version,
-        'bytes': bytes,
-        'playedAt': playedAt.toIso8601String(),
-        'kept': kept,
-      };
+    'key': key,
+    'clipId': clipId,
+    'name': name,
+    'file': file,
+    if (version != null) 'version': version,
+    'bytes': bytes,
+    'playedAt': playedAt.toIso8601String(),
+    'kept': kept,
+  };
 }

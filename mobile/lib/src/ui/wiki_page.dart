@@ -196,8 +196,11 @@ class _LabelWikiPageState extends State<LabelWikiPage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.article_outlined,
-                  size: 40, color: Theme.of(context).colorScheme.outline),
+              Icon(
+                Icons.article_outlined,
+                size: 40,
+                color: Theme.of(context).colorScheme.outline,
+              ),
               const SizedBox(height: 12),
               Text(
                 'Nothing written about “${widget.labelName}” yet.',
@@ -227,8 +230,9 @@ class _LabelWikiPageState extends State<LabelWikiPage> {
             Text(
               'edited by ${page.lastEditedBy}'
               '${page.lastEditedAt == null ? '' : ' on ${formatDateTime(page.lastEditedAt!)}'}',
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: theme.colorScheme.outline),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.outline,
+              ),
             ),
           ],
         ],

@@ -96,5 +96,9 @@ Uri? parseServerUrl(String input) {
   // Keep the port, drop everything after the origin: paths, queries and
   // fragments come from pasting a link to a clip, and every API path is
   // resolved from the origin.
-  return Uri(scheme: parsed.scheme, host: parsed.host, port: parsed.hasPort ? parsed.port : null);
+  return Uri(
+    scheme: parsed.scheme,
+    host: parsed.host,
+    port: parsed.hasPort ? parsed.port : null,
+  );
 }

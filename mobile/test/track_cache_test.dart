@@ -49,10 +49,8 @@ void main() {
 
   Uri urlFor(int id) => Uri.parse('https://example.test/clips/$id/audio');
 
-  TrackCache open({Directory? at}) => TrackCache(
-        locate: () async => at ?? directory,
-        httpClient: server,
-      );
+  TrackCache open({Directory? at}) =>
+      TrackCache(locate: () async => at ?? directory, httpClient: server);
 
   /// Put [bytes] bytes on the fake server as clip [id], then cache it.
   Future<void> store(int id, int bytes, {bool kept = false}) async {
@@ -97,12 +95,14 @@ void main() {
     expect(server.requests.single.headers['Authorization'], 'Bearer tok');
   });
 
-  test('the extension follows the content type, which AVPlayer reads',
-      () async {
-    server.bodies['/clips/1/audio'] = audioOf(16);
-    final file = await cache.store(clipFixture(), urlFor(1));
-    expect(file!.path, endsWith('.mp3'));
-  });
+  test(
+    'the extension follows the content type, which AVPlayer reads',
+    () async {
+      server.bodies['/clips/1/audio'] = audioOf(16);
+      final file = await cache.store(clipFixture(), urlFor(1));
+      expect(file!.path, endsWith('.mp3'));
+    },
+  );
 
   test('a second ask for the same clip is the same download', () async {
     server.bodies['/clips/1/audio'] = audioOf(64);
@@ -130,8 +130,11 @@ void main() {
     expect(cache.hasCopy(urlFor(4)), isTrue);
     expect(cache.usedBytes, 3000);
     // The bytes are gone, not just the bookkeeping.
-    expect(directory.listSync().whereType<File>().length, 4,
-        reason: 'three clips and the index');
+    expect(
+      directory.listSync().whereType<File>().length,
+      4,
+      reason: 'three clips and the index',
+    );
   });
 
   test('a kept clip is neither counted nor evicted', () async {
@@ -160,8 +163,7 @@ void main() {
     expect(cache.usedBytes, 0);
   });
 
-  test('a clip already cached can be kept without fetching it again',
-      () async {
+  test('a clip already cached can be kept without fetching it again', () async {
     await store(1, 256);
     await cache.setKept(clipFixture(id: 1), urlFor(1), true);
 
@@ -273,15 +275,20 @@ void main() {
     expect(reopened.isUsable, isTrue);
     expect(reopened.hasCopy(urlFor(1)), isFalse);
     // The clip's bytes were unaccounted for, so they went with the index.
-    expect(directory.listSync().whereType<File>().map((f) => f.path),
-        everyElement(endsWith('index.json')));
+    expect(
+      directory.listSync().whereType<File>().map((f) => f.path),
+      everyElement(endsWith('index.json')),
+    );
   });
 
   test('keeping a clip the server will not hand over reports that', () async {
     // Nothing on the server for clip 9: what an offline phone looks like.
     expect(await cache.setKept(clipFixture(id: 9), urlFor(9), false), isFalse);
-    expect(await cache.setKept(clipFixture(id: 9), urlFor(9), true), isFalse,
-        reason: 'the switch has to spring back, and say why');
+    expect(
+      await cache.setKept(clipFixture(id: 9), urlFor(9), true),
+      isFalse,
+      reason: 'the switch has to spring back, and say why',
+    );
     expect(cache.isKept(urlFor(9)), isFalse);
   });
 
@@ -339,11 +346,16 @@ void main() {
   test('the same clip id on two servers is two entries', () async {
     server.bodies['/clips/1/audio'] = audioOf(100);
     await cache.store(clipFixture(), urlFor(1));
-    await cache.store(clipFixture(), Uri.parse('https://other.test/clips/1/audio'));
+    await cache.store(
+      clipFixture(),
+      Uri.parse('https://other.test/clips/1/audio'),
+    );
 
     expect(cache.usedBytes, 200);
-    expect(cache.fileFor(urlFor(1))!.path,
-        isNot(cache.fileFor(Uri.parse('https://other.test/clips/1/audio'))!.path));
+    expect(
+      cache.fileFor(urlFor(1))!.path,
+      isNot(cache.fileFor(Uri.parse('https://other.test/clips/1/audio'))!.path),
+    );
   });
 
   test('the download query does not make a second entry', () async {
@@ -360,8 +372,7 @@ void main() {
     Uri versioned(String v) =>
         Uri.parse('https://example.test/clips/1/audio?v=$v');
 
-    test('the old copy is a miss and is replaced on the next store',
-        () async {
+    test('the old copy is a miss and is replaced on the next store', () async {
       server.bodies['/clips/1/audio'] = audioOf(100);
       await cache.store(clipFixture(), versioned('aaaa'));
       expect(cache.fileFor(versioned('aaaa')), isNotNull);
@@ -385,8 +396,7 @@ void main() {
       expect(cache.isKept(versioned('bbbb')), isTrue);
     });
 
-    test('a copy from before versions were recorded is still used',
-        () async {
+    test('a copy from before versions were recorded is still used', () async {
       server.bodies['/clips/1/audio'] = audioOf(100);
       await cache.store(clipFixture(), urlFor(1));
 

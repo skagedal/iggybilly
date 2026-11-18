@@ -51,20 +51,22 @@ void main() {
     expect(built.last.loaded.single, url);
   });
 
-  test('a clip that will not play still fails, but does not poison the rest',
-      () async {
-    // Both the original player and its replacement refuse this clip, so
-    // the clip is genuinely unplayable and the caller must hear about it.
-    failuresLeft = 2;
-    await expectLater(engine.load(url), throwsA(isA<Exception>()));
+  test(
+    'a clip that will not play still fails, but does not poison the rest',
+    () async {
+      // Both the original player and its replacement refuse this clip, so
+      // the clip is genuinely unplayable and the caller must hear about it.
+      failuresLeft = 2;
+      await expectLater(engine.load(url), throwsA(isA<Exception>()));
 
-    // The bug: before this class, every later clip failed too and only
-    // force-quitting the app helped.
-    await engine.load(other);
+      // The bug: before this class, every later clip failed too and only
+      // force-quitting the app helped.
+      await engine.load(other);
 
-    expect(built.length, 3);
-    expect(built.last.loaded.single, other);
-  });
+      expect(built.length, 3);
+      expect(built.last.loaded.single, other);
+    },
+  );
 
   test('a superseded load is not a broken player', () async {
     // just_audio throws this when a second load takes over from a first.
@@ -80,26 +82,28 @@ void main() {
     expect(fake.disposed, isFalse);
   });
 
-  test('listeners keep hearing from the player that replaced the old one',
-      () async {
-    final heard = <bool>[];
-    engine.playing.listen(heard.add);
+  test(
+    'listeners keep hearing from the player that replaced the old one',
+    () async {
+      final heard = <bool>[];
+      engine.playing.listen(heard.add);
 
-    await engine.load(url);
-    built.last.playingController.add(true);
-    await pumpEventQueue();
+      await engine.load(url);
+      built.last.playingController.add(true);
+      await pumpEventQueue();
 
-    // Wedge the player that is now loaded, and load something else.
-    built.last.loadError = Exception('wedged');
-    await engine.load(other);
-    built.last.playingController.add(true);
-    await pumpEventQueue();
+      // Wedge the player that is now loaded, and load something else.
+      built.last.loadError = Exception('wedged');
+      await engine.load(other);
+      built.last.playingController.add(true);
+      await pumpEventQueue();
 
-    expect(built.length, 2);
-    // The false in the middle is the replacement itself: nothing is
-    // loaded on a brand new player, so nothing is playing on it either.
-    expect(heard, [true, false, true]);
-  });
+      expect(built.length, 2);
+      // The false in the middle is the replacement itself: nothing is
+      // loaded on a brand new player, so nothing is playing on it either.
+      expect(heard, [true, false, true]);
+    },
+  );
 
   test('looping is re-applied to a replacement', () async {
     await engine.setLoopCurrent(true);

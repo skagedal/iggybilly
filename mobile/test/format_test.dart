@@ -33,16 +33,26 @@ void main() {
     final now = DateTime(2026, 5, 26, 12, 0);
 
     test('spells out the recent past', () {
-      expect(formatWhen(now.subtract(const Duration(seconds: 20)), now: now),
-          'just now');
-      expect(formatWhen(now.subtract(const Duration(minutes: 1)), now: now),
-          '1 minute ago');
-      expect(formatWhen(now.subtract(const Duration(minutes: 40)), now: now),
-          '40 minutes ago');
-      expect(formatWhen(now.subtract(const Duration(hours: 1)), now: now),
-          '1 hour ago');
-      expect(formatWhen(now.subtract(const Duration(days: 3)), now: now),
-          '3 days ago');
+      expect(
+        formatWhen(now.subtract(const Duration(seconds: 20)), now: now),
+        'just now',
+      );
+      expect(
+        formatWhen(now.subtract(const Duration(minutes: 1)), now: now),
+        '1 minute ago',
+      );
+      expect(
+        formatWhen(now.subtract(const Duration(minutes: 40)), now: now),
+        '40 minutes ago',
+      );
+      expect(
+        formatWhen(now.subtract(const Duration(hours: 1)), now: now),
+        '1 hour ago',
+      );
+      expect(
+        formatWhen(now.subtract(const Duration(days: 3)), now: now),
+        '3 days ago',
+      );
     });
 
     test('gives the date once a week has passed', () {
@@ -53,8 +63,10 @@ void main() {
     });
 
     test('gives the date for a clock that is ahead of the server', () {
-      expect(formatWhen(now.add(const Duration(hours: 2)), now: now),
-          '2026-05-26');
+      expect(
+        formatWhen(now.add(const Duration(hours: 2)), now: now),
+        '2026-05-26',
+      );
     });
   });
 
@@ -69,22 +81,29 @@ void main() {
 
   group('parseServerUrl', () {
     test('assumes https when no scheme is typed', () {
-      expect(parseServerUrl('iggybilly.skagedal.tech').toString(),
-          'https://iggybilly.skagedal.tech');
+      expect(
+        parseServerUrl('iggybilly.skagedal.tech').toString(),
+        'https://iggybilly.skagedal.tech',
+      );
     });
 
     test('keeps an explicit scheme and port', () {
-      expect(parseServerUrl('http://192.168.1.4:9020').toString(),
-          'http://192.168.1.4:9020');
+      expect(
+        parseServerUrl('http://192.168.1.4:9020').toString(),
+        'http://192.168.1.4:9020',
+      );
     });
 
     test('reduces a pasted link to its origin', () {
       expect(
-        parseServerUrl('https://iggybilly.skagedal.tech/clips/12?x=1').toString(),
+        parseServerUrl('https://iggybilly.skagedal.tech/clips/12?x=1')
+            .toString(),
         'https://iggybilly.skagedal.tech',
       );
-      expect(parseServerUrl('https://example.com/').toString(),
-          'https://example.com');
+      expect(
+        parseServerUrl('https://example.com/').toString(),
+        'https://example.com',
+      );
     });
 
     test('rejects what cannot be a server', () {
@@ -95,7 +114,10 @@ void main() {
     });
 
     test('ignores surrounding whitespace', () {
-      expect(parseServerUrl('  example.com  ').toString(), 'https://example.com');
+      expect(
+        parseServerUrl('  example.com  ').toString(),
+        'https://example.com',
+      );
     });
   });
 }

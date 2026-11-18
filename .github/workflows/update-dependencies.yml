@@ -16,6 +16,7 @@ jobs:
   update:
     name: Update dependencies and open a pull request
     runs-on: ubuntu-latest
+    environment: updates
     steps:
       # The pull request comes from a GitHub App rather than from me, for two
       # reasons. GitHub does not notify me of anything I did myself, so a pull

@@ -7,6 +7,32 @@ It talks to `/api/v1` on your own iggybilly server — see `src/api/` in
 the crate above for that surface, and for why it is separate from the
 JSON the React frontend consumes.
 
+## Bands
+
+Everything the app shows belongs to one band, and every request it makes
+names that band in its path: a request that says which band it wants
+cannot be answered about another one, so this phone refreshing its list
+while the web switches band is not a race.
+
+There is no address bar to put the band in, so it lives on the account
+screen — the only place it is switched. One band names it with nothing
+to tap; several give you the list; none says so and offers no clip list
+at all, because an empty one would read as "this band has no clips yet",
+which is a different and more confusing thing to be told.
+
+The band is remembered on the device as well as on the server, so a cold
+start with no network opens the band you were last in rather than
+refusing to open. A stored band the server no longer has you in is
+dropped on launch. Signing out forgets it, so the next person to sign in
+on this phone starts in their own band.
+
+Switching stops playback and clears the filters: a label belongs to a
+band, so `verse-1` in the band you just left means nothing in the one
+you arrived in, even when both have that label. Cached and
+kept-downloaded clips survive a switch — a clip is a clip whichever band
+it is in — and are evicted by the existing size rule without regard to
+band.
+
 ## The player
 
 One `PlayerController` (`lib/src/player/`) lives above the navigator, so

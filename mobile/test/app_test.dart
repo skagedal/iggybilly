@@ -67,9 +67,16 @@ class FakeServer {
               .firstWhere((l) => l['id'] == labelId)['name']
           as String;
 
+  /// The path with the band segment taken out, so the matchers below read
+  /// as the routes themselves rather than as routes-under-a-band. That
+  /// the app does name its band is asserted on `seen` instead, which
+  /// keeps the raw path.
+  static String _withoutBand(String path) =>
+      path.replaceFirst(RegExp(r'^/api/v1/[^/]+/(?=clips|labels)'), '/api/v1/');
+
   http.Response _respond(http.Request request) {
     seen.add(request);
-    final path = request.url.path;
+    final path = _withoutBand(request.url.path);
 
     if (path == '/api/v1/tokens' && request.method == 'POST') {
       return ok({'token': 'tok', 'tokenId': 1, 'user': userJson()});
@@ -533,7 +540,7 @@ void main() {
       expect(find.byIcon(Icons.drag_handle), findsNWidgets(3));
       expect(
         server.seen.map((r) => r.url.path),
-        contains('/api/v1/labels/10/playlist'),
+        contains('/api/v1/default/labels/10/playlist'),
       );
     });
 

@@ -40,8 +40,12 @@ class ApiException implements Exception {
 /// comes in by constructor so tests can hand it a fake rather than
 /// standing up a server.
 class IggybillyApi {
-  IggybillyApi({required this.baseUrl, http.Client? httpClient, this.token})
-    : _http = httpClient ?? http.Client();
+  IggybillyApi({
+    required this.baseUrl,
+    http.Client? httpClient,
+    this.token,
+    this.band,
+  }) : _http = httpClient ?? http.Client();
 
   /// Origin of the server, with no trailing slash.
   final Uri baseUrl;
@@ -51,8 +55,35 @@ class IggybillyApi {
   /// replaced in place when a password change issues a new one.
   String? token;
 
+  /// The band every content request is about.
+  ///
+  /// Named in the path rather than left to what the server remembers: a
+  /// request that says which band it wants cannot be answered about
+  /// another one, so the phone refreshing its list while the web
+  /// switches band is not a race. Null before the first sign-in, and for
+  /// an account in no band.
+  String? band;
+
+  /// `/api/v1/<band>/…`, for the routes about a band's content.
+  ///
+  /// The server answers these without a band too, resolving it to the
+  /// caller's last one — that is what keeps older builds of this app
+  /// working. This build does not rely on it: throwing here turns "no
+  /// band selected" into a bug rather than a quiet request about
+  /// whichever band the server happened to pick.
+  String _bandPath(String path) {
+    final slug = band;
+    if (slug == null) {
+      throw StateError('no band selected: cannot request $path');
+    }
+    return '/api/v1/${Uri.encodeComponent(slug)}$path';
+  }
+
   /// Resolve a server-relative path — the `audioUrl` on a clip, say —
   /// into an absolute URL for this server.
+  ///
+  /// The URLs the server hands out already carry the band, so nothing
+  /// here has to put it there.
   Uri resolve(String path) => baseUrl.resolve(path);
 
   /// The headers a media player needs to fetch audio itself.
@@ -123,6 +154,14 @@ class IggybillyApi {
     return json['token'] as String;
   }
 
+  /// Tell the server which band this account is looking at, so the web
+  /// and the next launch agree with this one.
+  ///
+  /// Only called when a person switches. An ordinary read names its band
+  /// in the path and has no business moving a preference.
+  Future<void> switchBand(String slug) =>
+      _send('POST', '/api/v1/me/band', body: {'band': slug});
+
   // -- Clips --------------------------------------------------------------
 
   /// Every clip carrying *all* of [labels]; an empty list is everything.
@@ -130,7 +169,7 @@ class IggybillyApi {
     final query = labels.map((l) => MapEntry('label', l));
     final list = await _send(
       'GET',
-      '/api/v1/clips',
+      _bandPath('/clips'),
       query: query.toList(growable: false),
     ) as List<dynamic>;
     return list
@@ -139,17 +178,17 @@ class IggybillyApi {
   }
 
   Future<Clip> clip(int id) async => Clip.fromJson(
-    await _send('GET', '/api/v1/clips/$id') as Map<String, dynamic>,
+    await _send('GET', _bandPath('/clips/$id')) as Map<String, dynamic>,
   );
 
-  Future<void> deleteClip(int id) => _send('DELETE', '/api/v1/clips/$id');
+  Future<void> deleteClip(int id) => _send('DELETE', _bandPath('/clips/$id'));
 
   /// Rename a clip, returning the name it landed on — the server trims,
   /// so what you asked for is not necessarily what you get.
   Future<String> renameClip(int id, String name) async {
     final json = await _send(
       'POST',
-      '/api/v1/clips/$id/name',
+      _bandPath('/clips/$id/name'),
       body: {'name': name},
     ) as Map<String, dynamic>;
     return json['name'] as String;
@@ -158,7 +197,7 @@ class IggybillyApi {
   /// Upload audio files. Each becomes its own clip; the server derives
   /// the name from the filename and de-duplicates it.
   Future<List<UploadedClip>> upload(List<UploadFile> files) async {
-    final request = http.MultipartRequest('POST', resolve('/api/v1/clips'))
+    final request = http.MultipartRequest('POST', resolve(_bandPath('/clips')))
       ..headers.addAll(authHeaders);
     for (final file in files) {
       request.files.add(
@@ -211,11 +250,16 @@ class IggybillyApi {
   /// caller replaces its state rather than guessing what the server did
   /// with the name it sent.
   Future<List<Label>> addLabel(int clipId, String name) async => _labels(
-    await _send('POST', '/api/v1/clips/$clipId/labels', body: {'name': name}),
+    await _send(
+      'POST',
+      _bandPath('/clips/$clipId/labels'),
+      body: {'name': name},
+    ),
   );
 
-  Future<List<Label>> removeLabel(int clipId, int labelId) async =>
-      _labels(await _send('DELETE', '/api/v1/clips/$clipId/labels/$labelId'));
+  Future<List<Label>> removeLabel(int clipId, int labelId) async => _labels(
+    await _send('DELETE', _bandPath('/clips/$clipId/labels/$labelId')),
+  );
 
   Future<LabelSuggestions> suggestLabels({
     String query = '',
@@ -226,7 +270,7 @@ class IggybillyApi {
       if (clipId != null) MapEntry('clipId', '$clipId'),
     ];
     return LabelSuggestions.fromJson(
-      await _send('GET', '/api/v1/labels/search', query: params)
+      await _send('GET', _bandPath('/labels/search'), query: params)
           as Map<String, dynamic>,
     );
   }
@@ -239,7 +283,7 @@ class IggybillyApi {
 
   /// A label's clips in the order the band has put them in.
   Future<Playlist> playlist(int labelId) async => Playlist.fromJson(
-    await _send('GET', '/api/v1/labels/$labelId/playlist')
+    await _send('GET', _bandPath('/labels/$labelId/playlist'))
         as Map<String, dynamic>,
   );
 
@@ -253,7 +297,7 @@ class IggybillyApi {
   ) async {
     final json = await _send(
       'POST',
-      '/api/v1/labels/$labelId/order',
+      _bandPath('/labels/$labelId/order'),
       body: {'clipId': clipId, 'afterClipId': afterClipId},
     ) as Map<String, dynamic>;
     return (json['order'] as List<dynamic>).cast<int>();
@@ -262,14 +306,15 @@ class IggybillyApi {
   // -- Label wiki ---------------------------------------------------------
 
   Future<WikiPage> wiki(int labelId) async => WikiPage.fromJson(
-    await _send('GET', '/api/v1/labels/$labelId/wiki') as Map<String, dynamic>,
+    await _send('GET', _bandPath('/labels/$labelId/wiki'))
+        as Map<String, dynamic>,
   );
 
   Future<WikiPage> saveWiki(int labelId, String content) async =>
       WikiPage.fromJson(
         await _send(
           'POST',
-          '/api/v1/labels/$labelId/wiki',
+          _bandPath('/labels/$labelId/wiki'),
           body: {'content': content},
         ) as Map<String, dynamic>,
       );
@@ -277,7 +322,7 @@ class IggybillyApi {
   Future<List<WikiRevision>> wikiHistory(int labelId) async {
     final list = await _send(
       'GET',
-      '/api/v1/labels/$labelId/wiki/history',
+      _bandPath('/labels/$labelId/wiki/history'),
     ) as List<dynamic>;
     return list
         .map((r) => WikiRevision.fromJson(r as Map<String, dynamic>))
@@ -287,7 +332,7 @@ class IggybillyApi {
   /// Restore an old revision. It is appended as a new revision, so
   /// nothing between then and now is lost.
   Future<void> restoreWiki(int labelId, int revisionId) =>
-      _send('POST', '/api/v1/labels/$labelId/wiki/restore/$revisionId');
+      _send('POST', _bandPath('/labels/$labelId/wiki/restore/$revisionId'));
 
   // -- Plumbing -----------------------------------------------------------
 

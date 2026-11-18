@@ -67,6 +67,28 @@ class Session extends ChangeNotifier {
   /// The username to prefill the sign-in field with.
   String? get lastUsername => _lastUsername;
 
+  /// The band the app is looking at, or null for an account in no band —
+  /// which every screen treats as its own state rather than as an empty
+  /// list.
+  String? get band => _api?.band;
+
+  /// Every band the signed-in user is in, by slug.
+  List<String> get bands => _user?.bands ?? const [];
+
+  /// Look at a different band: tell the server, remember it on the
+  /// device, and let every screen rebuild against it.
+  ///
+  /// The server is told first. If that fails the switch does not happen,
+  /// which is better than a phone quietly disagreeing with the web about
+  /// where it is.
+  Future<void> switchBand(String slug) async {
+    if (slug == band) return;
+    await api.switchBand(slug);
+    api.band = slug;
+    await _store.writeBand(slug);
+    notifyListeners();
+  }
+
   /// The client for the current session. Only valid while signed in;
   /// every screen that uses it is only built in that state.
   IggybillyApi get api {
@@ -95,9 +117,26 @@ class Session extends ChangeNotifier {
       return;
     }
 
+    // The band this device was last looking at, before anything is
+    // asked of the network: a cold start in a tunnel opens the band you
+    // were in rather than refusing to open at all.
     final api = _newApi(token);
+    api.band = await _store.readBand();
     try {
       _user = await api.me();
+      // The server has the last word on which bands exist and which of
+      // them are this user's, so a stored slug survives only if it is
+      // still one of them — someone removed from a band must not keep
+      // asking about it.
+      final stored = api.band;
+      final user = _user!;
+      api.band = (stored != null && user.bands.contains(stored))
+          ? stored
+          : user.band;
+      final resolved = api.band;
+      if (resolved != null && resolved != stored) {
+        await _store.writeBand(resolved);
+      }
       _api = api;
       _set(SessionStatus.signedIn);
     } on ApiException catch (e) {
@@ -136,6 +175,7 @@ class Session extends ChangeNotifier {
     }
 
     api.token = result.token;
+    api.band = result.user.band;
     _server = server;
     _user = result.user;
     _lastUsername = username;
@@ -144,6 +184,12 @@ class Session extends ChangeNotifier {
     await _store.writeServerUrl(server.toString());
     await _store.writeUsername(username);
     await _store.writeToken(result.token);
+    final band = result.user.band;
+    if (band == null) {
+      await _store.clearBand();
+    } else {
+      await _store.writeBand(band);
+    }
     _set(SessionStatus.signedIn);
   }
 
@@ -164,6 +210,10 @@ class Session extends ChangeNotifier {
       if (_httpClient == null) api.close();
     }
     await _store.clearToken();
+    // The band goes with the sign-out: it is not a secret, but the next
+    // person to sign in on this phone has no business landing in the
+    // last one's band.
+    await _store.clearBand();
     _api = null;
     _user = null;
     _set(SessionStatus.signedOut);

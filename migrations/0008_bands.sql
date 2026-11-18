@@ -4,7 +4,7 @@
 -- of it because they existed, and every clip was its because there was
 -- nowhere else for a clip to be. That is now written down — a band is a
 -- row, membership is a row — and once it is written down there can be
--- more than one of it. See specs/drafts/multiple-bands.md.
+-- more than one of it. See specs/implemented/005-multiple-bands.md.
 --
 -- The slug is the band's whole name. It appears in every URL for the
 -- band's content, so it is validated as lower-kebab-case (the same rule

@@ -1,12 +1,20 @@
 # iggybilly
 
-Self-hosted audio clip sharing for a band. Rust + Axum + SQLite on the
+Self-hosted audio clip sharing for bands. Rust + Axum + SQLite on the
 back, React + TypeScript on the front, deployed as a single container to
 `iggybilly.skagedal.tech`. There is also a Flutter app for iOS and
 Android in [`mobile/`](mobile/), talking to the same server.
 
 ## What it does
 
+- Everything belongs to a **band**: its clips, its labels, their wiki
+  pages and their playlist order. A user is a member of zero or more
+  bands, and sees exactly the bands they are in. Every screen about a
+  band’s content sits under the band’s slug — `/bonband/`,
+  `/bonband/clips/12` — so a link means the same thing to everyone who
+  clicks it. Two bands can both have a clip called Take 3 and a label
+  called `verse-1`; they are different rows and never meet. See
+  [`specs/implemented/005-multiple-bands.md`](specs/implemented/005-multiple-bands.md).
 - Users sign in with username + password (argon2-hashed, session cookies).
 - Each user can change their own password; admin resets are CLI-only.
 - Anyone can upload an audio file (MP3, M4A, or AAC as some Android
@@ -278,10 +286,41 @@ with a package-level summary of what moved; see
 
     iggybilly create-user <username> [--admin]
     iggybilly reset-password <username>
+    iggybilly list-users
 
-Both print the new random password to stdout. Send it to the user over
-whatever channel you'd send a password.
+Both password commands print the new random password to stdout. Send it
+to the user over whatever channel you’d send a password. `list-users`
+shows the bands each user is in, so it and `list-bands` together answer
+"who can see what" without opening the database.
 
+Bands are administered here too, and nowhere else — there is no
+self-service and no band admin role:
+
+    iggybilly create-band <slug>
+    iggybilly rename-band <old-slug> <new-slug>
+    iggybilly list-bands
+    iggybilly assign-to-band <username> <band>
+    iggybilly remove-from-band <username> <band>
+    iggybilly set-band-webhook <band> [<url>]
+
+A slug is lower-kebab-case, by the same rule as a label, and is the
+band’s whole name — there is no separate display name. `create-band`
+refuses one that is taken or that would shadow a path the server
+already answers on.
+
+`rename-band` changes every URL the band’s content is reachable at, with
+no redirect from the old slug, and says so as it runs. Removing someone
+from a band leaves their clips with the band: a clip belongs to the
+band, not to whoever uploaded it.
+
+`set-band-webhook` points one band’s Discord posts at its own channel.
+With no URL it clears that, and the band falls back to the
+instance-wide `IGGYBILLY_DISCORD_WEBHOOK_URL`.
+
+A user in no band can sign in and reach nothing: the web says so on a
+page, and the API answers 403. The migration to multiple bands put
+everything in a band called `default`; renaming it is a command to run
+whenever it suits, and nothing checks whether you have.
 ## Deploy
 
 - CI builds `skagedal/iggybilly:latest` on push to `main` and rolls the

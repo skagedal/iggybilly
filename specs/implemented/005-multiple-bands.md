@@ -1,8 +1,8 @@
 # Multiple bands
 
 Implements [#34](https://github.com/skagedal/iggybilly/issues/34).
-Complements [001-label-wiki](../implemented/001-label-wiki.md) and
-[002-playlists-from-labels](../implemented/002-playlists-from-labels.md),
+Complements [001-label-wiki](001-label-wiki.md) and
+[002-playlists-from-labels](002-playlists-from-labels.md),
 whose labels, pages and playlists all become one band's rather than the
 instance's.
 
@@ -238,6 +238,26 @@ perfectly working slug, the migration has no opinion about it, and
 nothing anywhere checks whether it has been renamed — the rename is a
 command the site owner runs when it suits them, not a step the deploy
 waits for.
+
+Two things the writing of it turned up, recorded here because the next
+person to rebuild a table in SQLite will meet the first of them.
+
+Making a label name unique per band rather than globally means
+rebuilding the table: the old uniqueness is a column-level `UNIQUE`,
+which SQLite implements as an automatic index that cannot be dropped.
+And `DROP TABLE labels` fires `ON DELETE CASCADE` on the two tables that
+reference a label — every label on every clip, and the entire wiki
+history. `PRAGMA defer_foreign_keys` does not help: it defers the
+*check* that a reference is satisfied, not the cascade that fires on
+delete. So both children are rebuilt and dropped before the parent, and
+a test asserts their rows are still there afterwards. The first version
+of this migration, which did not, silently emptied both.
+
+Scoping reads by band was not enough on its own. Deleting a clip and
+removing a label looked their rows up by id with no band in the query,
+and the uploader check on delete is not a substitute: a clip stays with
+its band when its uploader is removed from that band, so "I uploaded it"
+and "I may still reach it" are different questions.
 
 ### Routing
 

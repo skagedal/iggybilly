@@ -64,6 +64,39 @@ const post = <T>(path: string, body?: unknown) =>
   request<T>("POST", path, body);
 const del = <T>(path: string) => request<T>("DELETE", path);
 
+/**
+ * The first path segments that are not a band: the screens about the
+ * person or the server rather than about one band's content.
+ */
+const NOT_A_BAND = new Set(["login", "account", "api", "static", "healthz"]);
+
+/**
+ * The band the current page belongs to, read from the URL.
+ *
+ * Every band page's URL begins with the slug, which makes the URL the
+ * one place this is always right — including immediately after a
+ * client-side navigation, since the router pushes the new URL before
+ * rendering the page under it. The alternative, threading a band down
+ * from page props, would mean passing one through every component that
+ * happens to make a call: the label input, the wiki panel, the player.
+ *
+ * Throwing rather than guessing matters. A wrong slug would build a URL
+ * that looks plausible and quietly asks about the wrong band.
+ */
+function currentBand(): string {
+  const slug = window.location.pathname.split("/")[1] ?? "";
+  if (!slug || NOT_A_BAND.has(slug)) {
+    throw new Error(
+      `no band in the URL (${window.location.pathname}): this call is about a band's content and can only be made from one of its pages`,
+    );
+  }
+  return slug;
+}
+
+/** `/api/<band>/…`, for the calls that are about a band's content. */
+const bandPath = (path: string) =>
+  `/api/${encodeURIComponent(currentBand())}${path}`;
+
 export const api = {
   login: (username: string, password: string) =>
     post<void>("/api/login", { username, password }),
@@ -73,28 +106,36 @@ export const api = {
   changePassword: (currentPassword: string, newPassword: string) =>
     post<void>("/api/account/password", { currentPassword, newPassword }),
 
+  /**
+   * Remember which band the user is looking at. The account screen posts
+   * this and then navigates to the band, which would set it anyway —
+   * posting first means the preference is right even if the navigation is
+   * the last thing this tab does.
+   */
+  switchBand: (band: string) => post<void>("/api/account/band", { band }),
+
   /** Uploads one or more files in a single multipart request. */
   uploadClips: (files: File[]) => {
     const form = new FormData();
     for (const file of files) form.append("audio", file, file.name);
-    return post<{ clips: { id: number; name: string }[] }>("/api/clips", form);
+    return post<{ clips: { id: number; name: string }[] }>(bandPath("/clips"), form);
   },
 
-  deleteClip: (clipId: number) => del<void>(`/api/clips/${clipId}`),
+  deleteClip: (clipId: number) => del<void>(bandPath(`/clips/${clipId}`)),
 
   renameClip: (clipId: number, name: string) =>
-    post<{ name: string }>(`/api/clips/${clipId}/name`, { name }),
+    post<{ name: string }>(bandPath(`/clips/${clipId}/name`), { name }),
 
   addLabel: (clipId: number, name: string) =>
-    post<ClipLabel[]>(`/api/clips/${clipId}/labels`, { name }),
+    post<ClipLabel[]>(bandPath(`/clips/${clipId}/labels`), { name }),
 
   removeLabel: (clipId: number, labelId: number) =>
-    del<ClipLabel[]>(`/api/clips/${clipId}/labels/${labelId}`),
+    del<ClipLabel[]>(bandPath(`/clips/${clipId}/labels/${labelId}`)),
 
   searchLabels: (query: string, clipId?: number) => {
     const params = new URLSearchParams({ q: query });
     if (clipId !== undefined) params.set("clip_id", String(clipId));
-    return get<LabelSearchResult>(`/api/labels/search?${params}`);
+    return get<LabelSearchResult>(bandPath(`/labels/search?${params}`));
   },
 
   /**
@@ -103,16 +144,16 @@ export const api = {
    * now stands.
    */
   reorderPlaylist: (labelId: number, clipId: number, afterClipId: number | null) =>
-    post<{ order: number[] }>(`/api/labels/${labelId}/order`, {
+    post<{ order: number[] }>(bandPath(`/labels/${labelId}/order`), {
       clipId,
       afterClipId,
     }),
 
-  getWiki: (labelId: number) => get<WikiPage>(`/api/labels/${labelId}/wiki`),
+  getWiki: (labelId: number) => get<WikiPage>(bandPath(`/labels/${labelId}/wiki`)),
 
   saveWiki: (labelId: number, content: string) =>
-    post<WikiPage>(`/api/labels/${labelId}/wiki`, { content }),
+    post<WikiPage>(bandPath(`/labels/${labelId}/wiki`), { content }),
 
   restoreWikiRevision: (labelId: number, revisionId: number) =>
-    post<void>(`/api/labels/${labelId}/wiki/restore/${revisionId}`),
+    post<void>(bandPath(`/labels/${labelId}/wiki/restore/${revisionId}`)),
 };

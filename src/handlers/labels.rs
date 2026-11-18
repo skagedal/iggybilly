@@ -174,6 +174,7 @@ pub(crate) struct WikiPage {
 #[serde(rename_all = "camelCase")]
 struct WikiHistoryProps {
     username: String,
+    band: String,
     label_id: i64,
     label_name: String,
     revisions: Vec<WikiRevision>,
@@ -307,6 +308,7 @@ pub async fn wiki_history(
         "wiki-history",
         &WikiHistoryProps {
             username: user.username,
+            band: band.slug.clone(),
             label_id,
             label_name: name,
             revisions,

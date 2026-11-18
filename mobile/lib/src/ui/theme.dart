@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// The app's one colour: the green the web version uses for a played
 /// waveform, which is the only strong colour in either UI.

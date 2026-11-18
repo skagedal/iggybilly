@@ -4,7 +4,7 @@ publish_to: 'none'
 version: 0.1.0+1
 
 environment:
-  # The app is pinned to Flutter 3.47.2 in .fvmrc; run it through
+  # The app's Flutter version is pinned in .fvmrc; run it through
   # `fvm flutter`, not a flutter off $PATH.
   sdk: ^3.13.2
 
@@ -46,6 +46,9 @@ dependencies:
   # Joining and splitting those paths. Direct rather than borrowed
   # transitively, because the cache uses it.
   path: ^1.9.0
+
+  # Material widgets, split out of the Flutter SDK as of 3.50.
+  material_ui: ^1.11.1
 
 dev_dependencies:
   flutter_test:

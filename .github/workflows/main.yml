@@ -62,6 +62,9 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
         working-directory: mobile
+      - name: Check formatting
+        run: dart format --output=none --set-exit-if-changed lib test
+        working-directory: mobile
       - name: Analyze
         run: flutter analyze
         working-directory: mobile

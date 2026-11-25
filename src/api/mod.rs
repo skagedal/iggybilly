@@ -39,15 +39,16 @@ use axum::{
 
 use crate::web::{AppState, MAX_UPLOAD_REQUEST_BYTES};
 
-/// The whole v1 surface, to be nested under `/api/v1`.
-pub fn router() -> Router<AppState> {
+/// The part of the v1 surface that is about a band's content.
+///
+/// Nested twice: under `/api/v1/{band}`, which is what an app that
+/// knows about bands calls, and under `/api/v1` with no band at all,
+/// which is what every app already installed calls. The `ApiBand`
+/// extractor resolves the band from the path when there is one and from
+/// the caller's last band when there is not, so one set of handlers
+/// serves both and there is no second implementation to keep in step.
+pub fn band_router() -> Router<AppState> {
     Router::new()
-        // Sessions, as the app sees them: a token per install.
-        .route("/tokens", post(auth::create_token).get(auth::list_tokens))
-        .route("/tokens/current", delete(auth::revoke_current_token))
-        .route("/tokens/{id}", delete(auth::revoke_token))
-        .route("/me", get(auth::me))
-        .route("/me/password", post(auth::change_password))
         // Clips.
         .route(
             "/clips",
@@ -74,4 +75,18 @@ pub fn router() -> Router<AppState> {
             "/labels/{id}/wiki/restore/{rev}",
             post(labels::restore_wiki),
         )
+}
+
+/// The part of the v1 surface that belongs to no band: the session, the
+/// account, and which band the caller is looking at. Nested only under
+/// `/api/v1`, because none of it would mean anything under a slug.
+pub fn account_router() -> Router<AppState> {
+    Router::new()
+        // Sessions, as the app sees them: a token per install.
+        .route("/tokens", post(auth::create_token).get(auth::list_tokens))
+        .route("/tokens/current", delete(auth::revoke_current_token))
+        .route("/tokens/{id}", delete(auth::revoke_token))
+        .route("/me", get(auth::me))
+        .route("/me/password", post(auth::change_password))
+        .route("/me/band", post(auth::switch_band))
 }

@@ -13,7 +13,13 @@
 //! frontend already expects (formatted dates, hrefs), and `api::v1`
 //! builds JSON for the app (raw RFC 3339, no hrefs). Neither one is the
 //! canonical shape, which is the point.
+//!
+//! Since there is more than one band, every read of a band's content
+//! takes a band id as its first argument. That is deliberately not a
+//! filter each caller remembers to apply: there is no query here for
+//! "all the clips", so a handler cannot ask for one.
 
+pub mod bands;
 pub mod clips;
 pub mod labels;
 pub mod wiki;

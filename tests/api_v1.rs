@@ -81,6 +81,28 @@ async fn create_user(pool: &sqlx::SqlitePool, username: &str, password: &str) {
         .execute(pool)
         .await
         .unwrap();
+    // Every test user is in `default`, the band the migration creates.
+    // A user in no band can sign in and reach nothing, which is its own
+    // test rather than the starting point for every other one.
+    add_to_band(pool, username, "default").await;
+}
+
+/// Put a user in a band, creating the band if this is its first use.
+async fn add_to_band(pool: &sqlx::SqlitePool, username: &str, slug: &str) {
+    sqlx::query("INSERT OR IGNORE INTO bands (slug) VALUES (?)")
+        .bind(slug)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT OR IGNORE INTO band_members (band_id, user_id)
+         SELECT (SELECT id FROM bands WHERE slug = ?), (SELECT id FROM users WHERE username = ?)",
+    )
+    .bind(slug)
+    .bind(username)
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 /// Sign in and return the bearer token.
@@ -226,10 +248,13 @@ async fn clips_carry_raw_timestamps_and_their_own_urls() {
     assert_eq!(clip["uploader"], "alice");
     let audio_url = clip["audioUrl"].as_str().unwrap();
     assert!(
-        audio_url.starts_with(&format!("/clips/{id}/audio?v=")),
+        audio_url.starts_with(&format!("/default/clips/{id}/audio?v=")),
         "{audio_url}"
     );
-    assert_eq!(clip["downloadUrl"], format!("/clips/{id}/audio?download=1"));
+    assert_eq!(
+        clip["downloadUrl"],
+        format!("/default/clips/{id}/audio?download=1")
+    );
     // The uploader may delete their own clip, and the list says so
     // rather than making the client re-derive the rule.
     assert_eq!(clip["canDelete"], true);
@@ -441,7 +466,7 @@ async fn audio_is_served_to_a_bearer_token() {
     let ids = upload(&srv, &c, &token, &["riff.mp3"]).await;
 
     let r = c
-        .get(format!("{}/clips/{}/audio", srv.base, ids[0]))
+        .get(format!("{}/default/clips/{}/audio", srv.base, ids[0]))
         .bearer_auth(&token)
         .send()
         .await
@@ -453,7 +478,7 @@ async fn audio_is_served_to_a_bearer_token() {
     // And refused without one, rather than redirected: a player that
     // followed a redirect would try to decode the login page.
     let r = client()
-        .get(format!("{}/clips/{}/audio", srv.base, ids[0]))
+        .get(format!("{}/default/clips/{}/audio", srv.base, ids[0]))
         .bearer_auth("not-a-real-token")
         .send()
         .await
@@ -471,7 +496,7 @@ async fn audio_answers_range_requests() {
     let srv = start().await;
     let (c, token) = signed_in(&srv).await;
     let ids = upload(&srv, &c, &token, &["riff.mp3"]).await;
-    let url = format!("{}/clips/{}/audio", srv.base, ids[0]);
+    let url = format!("{}/default/clips/{}/audio", srv.base, ids[0]);
 
     let full = c.get(&url).bearer_auth(&token).send().await.unwrap();
     assert_eq!(full.status(), 200);

@@ -17,16 +17,17 @@ import type { ClipSummary, IndexProps, PlaylistInfo } from "../types";
 
 export default function IndexPage({
   username,
+  band,
   clips,
   activeFilters,
   activeWikis,
   playlist,
 }: IndexProps) {
   return (
-    <Layout username={username} nav={<a href="/account">Account</a>}>
+    <Layout username={username} band={band} nav={<a href="/account">Account</a>}>
       <section>
         <h2>Upload</h2>
-        <Uploader />
+        <Uploader band={band} />
       </section>
 
       <section>
@@ -47,7 +48,7 @@ export default function IndexPage({
                 </a>
               </span>
             ))}
-            <a className="clear" href="/">
+            <a className="clear" href={`/${band}/`}>
               Clear all
             </a>
           </div>
@@ -86,7 +87,7 @@ export default function IndexPage({
  * unfiltered list, since a freshly uploaded clip has no labels yet and
  * would be invisible under an active filter.
  */
-function Uploader() {
+function Uploader({ band }: { band: string }) {
   const { navigate } = useRouter();
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -111,7 +112,7 @@ function Uploader() {
     setError(null);
     try {
       await api.uploadClips(Array.from(files));
-      navigate("/");
+      navigate(`/${band}/`);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Upload failed.");
     } finally {

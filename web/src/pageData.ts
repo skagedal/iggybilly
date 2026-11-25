@@ -37,6 +37,7 @@ const pages: Record<string, () => Promise<{ default: PageComponent }>> = {
   "wiki-history": () => import("./pages/wiki-history"),
   login: () => import("./pages/login"),
   account: () => import("./pages/account"),
+  "no-band": () => import("./pages/no-band"),
 };
 
 export async function loadPage(entry: string): Promise<PageComponent> {

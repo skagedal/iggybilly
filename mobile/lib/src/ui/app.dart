@@ -9,6 +9,7 @@ import '../settings.dart';
 import 'app_scope.dart';
 import 'clip_page.dart';
 import 'clips_page.dart';
+import 'no_band_page.dart';
 import 'common.dart';
 import 'player_bar.dart';
 import 'sign_in_page.dart';
@@ -104,6 +105,9 @@ class _IggybillyAppState extends State<IggybillyApp> {
               case SessionStatus.signedOut:
                 return const SignInPage();
               case SessionStatus.signedIn:
+                // Signed in and in no band: there is nothing to put in a
+                // clip list, and an empty one would say the wrong thing.
+                if (widget.session.band == null) return const NoBandPage();
                 return _PlayerErrors(
                   player: _player,
                   child: _SignedIn(

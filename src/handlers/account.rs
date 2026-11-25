@@ -17,6 +17,11 @@ use crate::{
 #[derive(Serialize)]
 struct AccountProps {
     username: String,
+    /// Every band the user is in, and the one they were last in. One
+    /// band means the screen names it and offers nothing to pick; none
+    /// means it says so.
+    bands: Vec<String>,
+    band: Option<String>,
 }
 
 pub async fn form(
@@ -24,6 +29,8 @@ pub async fn form(
     CurrentUser(user): CurrentUser,
     format: PageFormat,
 ) -> AppResult<Response> {
+    let bands = crate::queries::bands::for_user(&state.pool, user.id).await?;
+    let band = crate::queries::bands::landing_band(&state.pool, user.id).await?;
     page(
         &state,
         format,
@@ -31,8 +38,33 @@ pub async fn form(
         "account",
         &AccountProps {
             username: user.username,
+            bands: bands.into_iter().map(|b| b.slug).collect(),
+            band: band.map(|b| b.slug),
         },
     )
+}
+
+#[derive(Deserialize)]
+pub struct SwitchBandRequest {
+    pub band: String,
+}
+
+/// POST /api/account/band — remember which band the user is looking at.
+///
+/// The account screen posts this and then navigates to the band's list.
+/// The navigation alone would be enough to move the preference, since
+/// arriving in a band sets it, but posting first means the preference is
+/// right even if the navigation is the last thing the browser does.
+pub async fn switch_band(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+    Json(req): Json<SwitchBandRequest>,
+) -> AppResult<Response> {
+    let band = crate::queries::bands::resolve_for_member(&state.pool, &req.band, user.id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    crate::queries::bands::set_last_band(&state.pool, user.id, band.id).await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 #[derive(Deserialize)]

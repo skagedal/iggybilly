@@ -22,6 +22,13 @@ abstract class CredentialStore {
   /// The username last signed in with, to prefill the field.
   Future<String?> readUsername();
   Future<void> writeUsername(String username);
+
+  /// The band this install was last looking at. Kept here as well as on
+  /// the server so a cold start with no network opens the band you were
+  /// in rather than refusing to open at all.
+  Future<String?> readBand();
+  Future<void> writeBand(String band);
+  Future<void> clearBand();
 }
 
 /// The real one: the token in the platform keystore, the rest in
@@ -49,6 +56,7 @@ class SecureCredentialStore implements CredentialStore {
   static const _tokenKey = 'iggybilly.token';
   static const _serverKey = 'iggybilly.server';
   static const _usernameKey = 'iggybilly.username';
+  static const _bandKey = 'iggybilly.band';
 
   final FlutterSecureStorage _secure;
 
@@ -77,16 +85,34 @@ class SecureCredentialStore implements CredentialStore {
   @override
   Future<void> writeUsername(String username) async =>
       (await SharedPreferences.getInstance()).setString(_usernameKey, username);
+
+  @override
+  Future<String?> readBand() async =>
+      (await SharedPreferences.getInstance()).getString(_bandKey);
+
+  @override
+  Future<void> writeBand(String band) async =>
+      (await SharedPreferences.getInstance()).setString(_bandKey, band);
+
+  @override
+  Future<void> clearBand() async =>
+      (await SharedPreferences.getInstance()).remove(_bandKey);
 }
 
 /// An in-memory store, for tests and for a first run where the platform
 /// storage is unavailable.
 class InMemoryCredentialStore implements CredentialStore {
-  InMemoryCredentialStore({this.token, this.serverUrl, this.username});
+  InMemoryCredentialStore({
+    this.token,
+    this.serverUrl,
+    this.username,
+    this.band,
+  });
 
   String? token;
   String? serverUrl;
   String? username;
+  String? band;
 
   @override
   Future<String?> readToken() async => token;
@@ -108,4 +134,13 @@ class InMemoryCredentialStore implements CredentialStore {
 
   @override
   Future<void> writeUsername(String value) async => username = value;
+
+  @override
+  Future<String?> readBand() async => band;
+
+  @override
+  Future<void> writeBand(String value) async => band = value;
+
+  @override
+  Future<void> clearBand() async => band = null;
 }

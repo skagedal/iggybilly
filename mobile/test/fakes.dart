@@ -110,15 +110,28 @@ Map<String, dynamic> clipJson({
   'canDelete': canDelete,
 };
 
+/// The `/me` payload. Every test user is in `default`, the band the
+/// migration creates: an account in no band can sign in and reach
+/// nothing, which is its own test rather than the starting point for
+/// every other one.
 Map<String, dynamic> userJson({
   int id = 1,
   String username = 'alice',
   bool isAdmin = false,
-}) => {'id': id, 'username': username, 'isAdmin': isAdmin};
+  List<String> bands = const ['default'],
+  String? band = 'default',
+}) => {
+  'id': id,
+  'username': username,
+  'isAdmin': isAdmin,
+  'bands': bands,
+  'band': band,
+};
 
 /// A credential store that starts out signed in.
 InMemoryCredentialStore storeWithToken(String token) => InMemoryCredentialStore(
   token: token,
   serverUrl: 'https://example.test',
   username: 'alice',
+  band: 'default',
 );

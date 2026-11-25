@@ -14,7 +14,7 @@ import { trackFor, usePlayer } from "../player";
 import { useRouter } from "../router";
 import type { ClipDetail, ClipLabel, ClipProps } from "../types";
 
-export default function ClipPage({ username, clip }: ClipProps) {
+export default function ClipPage({ username, band, clip }: ClipProps) {
   const player = usePlayer();
   const [name, setName] = useState(clip.name);
   const [labels, setLabels] = useState(clip.labels);
@@ -33,7 +33,7 @@ export default function ClipPage({ username, clip }: ClipProps) {
 
   const nav = (
     <>
-      <a href="/">Clips</a>
+      <a href={`/${band}/`}>Clips</a>
       <a href="/account">Account</a>
     </>
   );
@@ -67,7 +67,7 @@ export default function ClipPage({ username, clip }: ClipProps) {
         <LabelList clipId={clip.id} labels={labels} onChanged={labelsChanged} />
         <LabelInput clipId={clip.id} onAdded={labelsChanged} />
 
-        {clip.canDelete && <DeleteClip clipId={clip.id} name={name} />}
+        {clip.canDelete && <DeleteClip band={band} clipId={clip.id} name={name} />}
       </section>
     </Layout>
   );
@@ -268,7 +268,15 @@ function LabelList({
   );
 }
 
-function DeleteClip({ clipId, name }: { clipId: number; name: string }) {
+function DeleteClip({
+  band,
+  clipId,
+  name,
+}: {
+  band: string;
+  clipId: number;
+  name: string;
+}) {
   const player = usePlayer();
   const { navigate } = useRouter();
   const [busy, setBusy] = useState(false);
@@ -287,7 +295,7 @@ function DeleteClip({ clipId, name }: { clipId: number; name: string }) {
       // otherwise the bar would keep a dead URL loaded — or take it out of
       // the queue if it was only waiting its turn.
       player.forget(clipId);
-      navigate("/");
+      navigate(`/${band}/`);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Could not delete the clip.");
       setBusy(false);

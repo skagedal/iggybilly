@@ -93,6 +93,28 @@ async fn create_user(pool: &sqlx::SqlitePool, username: &str, password: &str) {
         .execute(pool)
         .await
         .unwrap();
+    // Every test user is in `default`, the band the migration creates.
+    // A user in no band can sign in and reach nothing, which is its own
+    // test rather than the starting point for every other one.
+    add_to_band(pool, username, "default").await;
+}
+
+/// Put a user in a band, creating the band if this is its first use.
+async fn add_to_band(pool: &sqlx::SqlitePool, username: &str, slug: &str) {
+    sqlx::query("INSERT OR IGNORE INTO bands (slug) VALUES (?)")
+        .bind(slug)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT OR IGNORE INTO band_members (band_id, user_id)
+         SELECT (SELECT id FROM bands WHERE slug = ?), (SELECT id FROM users WHERE username = ?)",
+    )
+    .bind(slug)
+    .bind(username)
+    .execute(pool)
+    .await
+    .unwrap();
 }
 
 async fn login(srv: &Server, c: &reqwest::Client, user: &str, pass: &str) {
@@ -153,7 +175,7 @@ async fn upload_many(srv: &Server, c: &reqwest::Client, filenames: &[&str]) {
         form = form.part("audio", part);
     }
     let r = c
-        .post(format!("{}/api/clips", srv.base))
+        .post(format!("{}/api/default/clips", srv.base))
         .multipart(form)
         .send()
         .await
@@ -163,7 +185,7 @@ async fn upload_many(srv: &Server, c: &reqwest::Client, filenames: &[&str]) {
 
 async fn add_label(srv: &Server, c: &reqwest::Client, clip_id: i64, name: &str) {
     let r = c
-        .post(format!("{}/api/clips/{clip_id}/labels", srv.base))
+        .post(format!("{}/api/default/clips/{clip_id}/labels", srv.base))
         .json(&serde_json::json!({ "name": name }))
         .send()
         .await
@@ -186,7 +208,16 @@ async fn login_with_correct_password_grants_access() {
     let c = client();
     login(&srv, &c, "alice", "passw0rd!").await;
 
+    // `/` is nobody's band, so it sends you to yours.
     let r = c.get(format!("{}/", srv.base)).send().await.unwrap();
+    assert_eq!(r.status(), 303);
+    assert_eq!(r.headers().get("location").unwrap(), "/default/");
+
+    let r = c
+        .get(format!("{}/default/", srv.base))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(r.status(), 200);
     let html = r.text().await.unwrap();
     // Every page boots the same entry; which module it then loads comes
@@ -215,8 +246,8 @@ async fn pages_serve_json_to_the_client_router() {
     upload_one(&srv, &c, "Riff.mp3").await;
 
     for (path, entry) in [
-        ("/", "index"),
-        ("/clips/1", "clip"),
+        ("/default/", "index"),
+        ("/default/clips/1", "clip"),
         ("/account", "account"),
     ] {
         let envelope = get_envelope(&srv, &c, path).await;
@@ -229,7 +260,11 @@ async fn pages_serve_json_to_the_client_router() {
     }
 
     // And the browser's own Accept header still gets the full shell.
-    let r = c.get(format!("{}/clips/1", srv.base)).send().await.unwrap();
+    let r = c
+        .get(format!("{}/default/clips/1", srv.base))
+        .send()
+        .await
+        .unwrap();
     let html = r.text().await.unwrap();
     assert!(html.starts_with("<!doctype html>"));
     assert_eq!(page_envelope(&html)["entry"], "clip");
@@ -321,7 +356,7 @@ async fn label_wiki_saves_renders_history_and_restores() {
 
     // Save a wiki page; the <script> must be neutralised in the render.
     let r = c
-        .post(format!("{}/api/labels/{label_id}/wiki", srv.base))
+        .post(format!("{}/api/default/labels/{label_id}/wiki", srv.base))
         .json(&serde_json::json!({
             "content": "# Verse\n\nLyrics **here** <script>alert(1)</script>",
         }))
@@ -342,7 +377,7 @@ async fn label_wiki_saves_renders_history_and_restores() {
     // markup is escaped on the way into the <script> block, so a literal
     // "<h1>" in the document would mean the escaping had failed.
     let raw = c
-        .get(format!("{}/?label=verse", srv.base))
+        .get(format!("{}/default/?label=verse", srv.base))
         .send()
         .await
         .unwrap()
@@ -362,7 +397,7 @@ async fn label_wiki_saves_renders_history_and_restores() {
         .contains("<h1>Verse</h1>"));
 
     // A second edit appends a revision rather than overwriting.
-    c.post(format!("{}/api/labels/{label_id}/wiki", srv.base))
+    c.post(format!("{}/api/default/labels/{label_id}/wiki", srv.base))
         .json(&serde_json::json!({ "content": "# Verse v2" }))
         .send()
         .await
@@ -377,7 +412,12 @@ async fn label_wiki_saves_renders_history_and_restores() {
 
     // History lists revisions newest first, with the newest marked
     // current so only the older ones offer a restore.
-    let hist = get_props(&srv, &c, &format!("/labels/{label_id}/wiki/history")).await;
+    let hist = get_props(
+        &srv,
+        &c,
+        &format!("/default/labels/{label_id}/wiki/history"),
+    )
+    .await;
     let revisions = hist["revisions"].as_array().unwrap();
     assert_eq!(revisions.len(), 2);
     assert_eq!(revisions[0]["isCurrent"], true);
@@ -392,7 +432,7 @@ async fn label_wiki_saves_renders_history_and_restores() {
             .unwrap();
     let r = c
         .post(format!(
-            "{}/api/labels/{label_id}/wiki/restore/{oldest}",
+            "{}/api/default/labels/{label_id}/wiki/restore/{oldest}",
             srv.base
         ))
         .send()
@@ -433,7 +473,7 @@ async fn uploader_can_delete_own_clip_and_bytes_are_removed() {
     assert!(audio_path.exists(), "audio file should exist before delete");
 
     let r = c
-        .delete(format!("{}/api/clips/1", srv.base))
+        .delete(format!("{}/api/default/clips/1", srv.base))
         .send()
         .await
         .unwrap();
@@ -472,7 +512,7 @@ async fn cannot_delete_another_users_clip() {
     let bob = client();
     login(&srv, &bob, "bob", "pw").await;
     let r = bob
-        .delete(format!("{}/api/clips/1", srv.base))
+        .delete(format!("{}/api/default/clips/1", srv.base))
         .send()
         .await
         .unwrap();
@@ -486,9 +526,9 @@ async fn cannot_delete_another_users_clip() {
 
     // Bob's copy of the page is told not to render a delete control;
     // alice's is. The 403 above is what actually enforces it.
-    let bob_view = get_props(&srv, &bob, "/clips/1").await;
+    let bob_view = get_props(&srv, &bob, "/default/clips/1").await;
     assert_eq!(bob_view["clip"]["canDelete"], false);
-    let alice_view = get_props(&srv, &alice, "/clips/1").await;
+    let alice_view = get_props(&srv, &alice, "/default/clips/1").await;
     assert_eq!(alice_view["clip"]["canDelete"], true);
 }
 
@@ -500,7 +540,7 @@ async fn deleting_a_missing_clip_404s() {
     login(&srv, &c, "alice", "pw").await;
 
     let r = c
-        .delete(format!("{}/api/clips/999", srv.base))
+        .delete(format!("{}/api/default/clips/999", srv.base))
         .send()
         .await
         .unwrap();
@@ -518,7 +558,7 @@ async fn rename_succeeds_and_409s_on_conflict() {
     upload_one(&srv, &c, "Take.mp3").await;
 
     let r = c
-        .post(format!("{}/api/clips/1/name", srv.base))
+        .post(format!("{}/api/default/clips/1/name", srv.base))
         .json(&serde_json::json!({ "name": "Fresh" }))
         .send()
         .await
@@ -528,7 +568,7 @@ async fn rename_succeeds_and_409s_on_conflict() {
     assert_eq!(body["name"], "Fresh");
 
     let r = c
-        .post(format!("{}/api/clips/2/name", srv.base))
+        .post(format!("{}/api/default/clips/2/name", srv.base))
         .json(&serde_json::json!({ "name": "Fresh" }))
         .send()
         .await
@@ -548,7 +588,7 @@ async fn add_label_accepts_valid_and_normalises_case() {
 
     for input in ["verse-1", "Chorus", "pålägg"] {
         let r = c
-            .post(format!("{}/api/clips/1/labels", srv.base))
+            .post(format!("{}/api/default/clips/1/labels", srv.base))
             .json(&serde_json::json!({ "name": input }))
             .send()
             .await
@@ -576,7 +616,7 @@ async fn add_label_rejects_invalid_shapes() {
 
     for bad in ["verse 1", "verse_1", "--verse", "verse-", "verse.1", ""] {
         let r = c
-            .post(format!("{}/api/clips/1/labels", srv.base))
+            .post(format!("{}/api/default/clips/1/labels", srv.base))
             .json(&serde_json::json!({ "name": bad }))
             .send()
             .await
@@ -608,14 +648,14 @@ async fn filter_by_labels_uses_and_semantics() {
     add_label(&srv, &c, 2, "chorus").await;
     add_label(&srv, &c, 3, "chorus").await;
 
-    let props = get_props(&srv, &c, "/?label=verse").await;
+    let props = get_props(&srv, &c, "/default/?label=verse").await;
     assert_eq!(
         props["clips"].as_array().unwrap().len(),
         2,
         "?label=verse should match 2 clips"
     );
 
-    let props = get_props(&srv, &c, "/?label=verse&label=chorus").await;
+    let props = get_props(&srv, &c, "/default/?label=verse&label=chorus").await;
     let clips = props["clips"].as_array().unwrap();
     assert_eq!(
         clips.len(),
@@ -639,7 +679,7 @@ async fn label_autocomplete_returns_recent_for_empty_query() {
     add_label(&srv, &c, 1, "chorus").await;
 
     let body: serde_json::Value = c
-        .get(format!("{}/api/labels/search?q=", srv.base))
+        .get(format!("{}/api/default/labels/search?q=", srv.base))
         .send()
         .await
         .unwrap()
@@ -665,7 +705,7 @@ async fn label_autocomplete_offers_create_for_new_query() {
     add_label(&srv, &c, 1, "verse").await;
 
     let body: serde_json::Value = c
-        .get(format!("{}/api/labels/search?q=ver", srv.base))
+        .get(format!("{}/api/default/labels/search?q=ver", srv.base))
         .send()
         .await
         .unwrap()
@@ -697,7 +737,7 @@ async fn audio_download_sets_content_disposition() {
 
     // Plain ?audio — inline playback, no disposition header.
     let r = c
-        .get(format!("{}/clips/1/audio", srv.base))
+        .get(format!("{}/default/clips/1/audio", srv.base))
         .send()
         .await
         .unwrap();
@@ -709,7 +749,7 @@ async fn audio_download_sets_content_disposition() {
 
     // ?download=1 — attachment + RFC 6266 UTF-8 filename* parameter.
     let r = c
-        .get(format!("{}/clips/1/audio?download=1", srv.base))
+        .get(format!("{}/default/clips/1/audio?download=1", srv.base))
         .send()
         .await
         .unwrap();
@@ -814,7 +854,7 @@ async fn uploading_clips_posts_to_discord() {
         .to_string();
     assert!(content.contains("alice"), "names the uploader: {content}");
     assert!(
-        content.contains("[Riff](https://iggybilly.test/clips/1)"),
+        content.contains("[Riff](https://iggybilly.test/default/clips/1)"),
         "links the clip: {content}"
     );
 
@@ -850,7 +890,7 @@ async fn editing_a_wiki_posts_to_discord() {
         .await
         .unwrap();
 
-    c.post(format!("{}/api/labels/{label_id}/wiki", srv.base))
+    c.post(format!("{}/api/default/labels/{label_id}/wiki", srv.base))
         .json(&serde_json::json!({ "content": "# Verse" }))
         .send()
         .await
@@ -906,7 +946,7 @@ async fn reorder(
     after_clip_id: Option<i64>,
 ) -> Vec<i64> {
     let r = c
-        .post(format!("{}/api/labels/{label}/order", srv.base))
+        .post(format!("{}/api/default/labels/{label}/order", srv.base))
         .json(&serde_json::json!({ "clipId": clip_id, "afterClipId": after_clip_id }))
         .send()
         .await
@@ -972,7 +1012,7 @@ async fn the_backfill_orders_existing_memberships_newest_upload_first() {
         .unwrap();
 
     assert_eq!(
-        listed_ids(&srv, &c, "/?label=set").await,
+        listed_ids(&srv, &c, "/default/?label=set").await,
         vec![3, 2, 1],
         "the day it ships, the playlist is the list people already saw"
     );
@@ -993,15 +1033,21 @@ async fn a_playlist_lists_in_its_own_order_and_a_clip_moves_to_the_front() {
 
     // A newly labelled clip lands at the end, so the playlist is the
     // order they were labelled in — not the reverse-chronological list.
-    assert_eq!(listed_ids(&srv, &c, "/?label=set").await, vec![1, 2, 3]);
-    assert_eq!(listed_ids(&srv, &c, "/").await, vec![3, 2, 1]);
+    assert_eq!(
+        listed_ids(&srv, &c, "/default/?label=set").await,
+        vec![1, 2, 3]
+    );
+    assert_eq!(listed_ids(&srv, &c, "/default/").await, vec![3, 2, 1]);
 
-    let props = get_props(&srv, &c, "/?label=set").await;
+    let props = get_props(&srv, &c, "/default/?label=set").await;
     assert_eq!(props["playlist"]["labelId"], label);
     assert_eq!(props["playlist"]["labelName"], "set");
 
     assert_eq!(reorder(&srv, &c, label, 3, None).await, vec![3, 1, 2]);
-    assert_eq!(listed_ids(&srv, &c, "/?label=set").await, vec![3, 1, 2]);
+    assert_eq!(
+        listed_ids(&srv, &c, "/default/?label=set").await,
+        vec![3, 1, 2]
+    );
     // One row written: the two it was dropped in front of are untouched.
     assert_eq!(
         positions(&srv, label).await,
@@ -1018,7 +1064,10 @@ async fn a_clip_moves_to_the_end_of_a_playlist() {
     let label = playlist_of_three(&srv, &c, "set").await;
 
     assert_eq!(reorder(&srv, &c, label, 1, Some(3)).await, vec![2, 3, 1]);
-    assert_eq!(listed_ids(&srv, &c, "/?label=set").await, vec![2, 3, 1]);
+    assert_eq!(
+        listed_ids(&srv, &c, "/default/?label=set").await,
+        vec![2, 3, 1]
+    );
     assert_eq!(
         positions(&srv, label).await,
         vec![(2, 1024), (3, 2048), (1, 3072)]
@@ -1053,7 +1102,10 @@ async fn a_used_up_gap_renumbers_the_whole_label() {
         vec![(1, 0), (3, 1024), (2, 2048)],
         "every row of the label is spaced out again"
     );
-    assert_eq!(listed_ids(&srv, &c, "/?label=set").await, vec![1, 3, 2]);
+    assert_eq!(
+        listed_ids(&srv, &c, "/default/?label=set").await,
+        vec![1, 3, 2]
+    );
 }
 
 #[tokio::test]
@@ -1077,7 +1129,10 @@ async fn moving_a_clip_in_one_playlist_leaves_its_other_playlists_alone() {
         vec![(3, 0), (2, 1024), (1, 2048)],
         "a clip's place is a property of the membership, not of the clip"
     );
-    assert_eq!(listed_ids(&srv, &c, "/?label=takes").await, vec![3, 2, 1]);
+    assert_eq!(
+        listed_ids(&srv, &c, "/default/?label=takes").await,
+        vec![3, 2, 1]
+    );
 }
 
 #[tokio::test]
@@ -1090,7 +1145,7 @@ async fn reordering_refuses_a_list_that_no_longer_exists() {
     upload_one(&srv, &c, "outsider.mp3").await;
 
     let post = async |label: i64, body: serde_json::Value| {
-        c.post(format!("{}/api/labels/{label}/order", srv.base))
+        c.post(format!("{}/api/default/labels/{label}/order", srv.base))
             .json(&body)
             .send()
             .await
@@ -1124,7 +1179,7 @@ async fn reordering_refuses_a_list_that_no_longer_exists() {
     );
 
     assert_eq!(
-        listed_ids(&srv, &c, "/?label=set").await,
+        listed_ids(&srv, &c, "/default/?label=set").await,
         vec![1, 2, 3],
         "and none of that moved anything"
     );
@@ -1142,7 +1197,7 @@ async fn an_intersection_of_labels_stays_reverse_chronological() {
     }
     reorder(&srv, &c, set, 3, None).await;
 
-    let props = get_props(&srv, &c, "/?label=set&label=live").await;
+    let props = get_props(&srv, &c, "/default/?label=set&label=live").await;
     assert!(
         props["playlist"].is_null(),
         "two filters is an intersection, and an intersection has no order"
@@ -1170,4 +1225,345 @@ fn audio_bytes(name: &str) -> Vec<u8> {
             .join(fixture),
     )
     .unwrap()
+}
+
+// ---------------------------------------------------------------------
+// Bands
+//
+// The tests above all run in `default` and say what one band does. These
+// say what two bands do, which is almost entirely: not see each other.
+// ---------------------------------------------------------------------
+
+/// Upload a clip into a named band and return its id.
+async fn upload_into(srv: &Server, c: &reqwest::Client, band: &str, filename: &str) -> i64 {
+    let part = reqwest::multipart::Part::bytes(audio_bytes(filename))
+        .file_name(filename.to_string())
+        .mime_str("audio/mpeg")
+        .unwrap();
+    let form = reqwest::multipart::Form::new().part("audio", part);
+    let r = c
+        .post(format!("{}/api/{band}/clips", srv.base))
+        .multipart(form)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200, "upload into {band} should succeed");
+    let body: serde_json::Value = r.json().await.unwrap();
+    body["clips"][0]["id"]
+        .as_i64()
+        .expect("an uploaded clip id")
+}
+
+/// A band the caller is not a member of is indistinguishable from one
+/// that was never created. Both 404, so trying slugs tells a member of
+/// one band nothing about who else is on the instance.
+#[tokio::test]
+async fn a_band_you_are_not_in_looks_exactly_like_one_that_does_not_exist() {
+    let srv = start().await;
+    create_user(&srv.pool, "alice", "pw").await;
+    create_user(&srv.pool, "bob", "pw").await;
+    add_to_band(&srv.pool, "bob", "bonband").await;
+
+    let c = client();
+    login(&srv, &c, "alice", "pw").await;
+
+    for path in ["/bonband/", "/nosuchband/", "/bonband/clips/1"] {
+        let r = c.get(format!("{}{path}", srv.base)).send().await.unwrap();
+        assert_eq!(r.status(), 404, "GET {path} should be a plain 404");
+    }
+}
+
+/// Two bands can use the same words without meeting: the same clip name
+/// and the same label name are different rows, and neither list shows
+/// the other's.
+#[tokio::test]
+async fn two_bands_can_hold_the_same_names_and_see_none_of_each_other() {
+    let srv = start().await;
+    create_user(&srv.pool, "alice", "pw").await;
+    add_to_band(&srv.pool, "alice", "bonband").await;
+
+    let c = client();
+    login(&srv, &c, "alice", "pw").await;
+
+    let in_default = upload_into(&srv, &c, "default", "Riff.mp3").await;
+    let in_bonband = upload_into(&srv, &c, "bonband", "Riff.mp3").await;
+    assert_ne!(in_default, in_bonband, "two clips, not one");
+
+    // The same name landed in both, with no " (2)" suffix in sight: the
+    // suffixing resolves within a band.
+    for (band, id) in [("default", in_default), ("bonband", in_bonband)] {
+        let props = get_props(&srv, &c, &format!("/{band}/clips/{id}")).await;
+        assert_eq!(props["clip"]["name"], "Riff", "{band} kept the plain name");
+        assert_eq!(props["band"], band);
+    }
+
+    // And the same label name in both.
+    for (band, id) in [("default", in_default), ("bonband", in_bonband)] {
+        let r = c
+            .post(format!("{}/api/{band}/clips/{id}/labels", srv.base))
+            .json(&serde_json::json!({ "name": "verse-1" }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 200, "{band} should accept verse-1");
+    }
+
+    // Each band's list holds exactly its own clip.
+    assert_eq!(listed_ids(&srv, &c, "/default/").await, vec![in_default]);
+    assert_eq!(listed_ids(&srv, &c, "/bonband/").await, vec![in_bonband]);
+    assert_eq!(
+        listed_ids(&srv, &c, "/bonband/?label=verse-1").await,
+        vec![in_bonband],
+        "filtering by a shared label name stays inside the band"
+    );
+}
+
+/// A clip id is global, so naming one from another band under this
+/// band's URL is the interesting attack. Every route that takes a clip
+/// id answers as it would for an id that was never used.
+#[tokio::test]
+async fn another_bands_clip_id_is_not_found_under_your_band() {
+    let srv = start().await;
+    create_user(&srv.pool, "alice", "pw").await;
+    add_to_band(&srv.pool, "alice", "bonband").await;
+
+    let c = client();
+    login(&srv, &c, "alice", "pw").await;
+    let theirs = upload_into(&srv, &c, "bonband", "Riff.mp3").await;
+
+    // Alice is in both bands and uploaded this clip herself — so the
+    // uploader check cannot be what refuses her. Only the band can.
+    let r = c
+        .get(format!("{}/default/clips/{theirs}", srv.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404, "the clip page");
+
+    let r = c
+        .get(format!("{}/default/clips/{theirs}/audio", srv.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404, "the audio bytes");
+
+    let r = c
+        .post(format!("{}/api/default/clips/{theirs}/name", srv.base))
+        .json(&serde_json::json!({ "name": "Renamed" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404, "renaming");
+
+    let r = c
+        .post(format!("{}/api/default/clips/{theirs}/labels", srv.base))
+        .json(&serde_json::json!({ "name": "verse-1" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404, "labelling");
+
+    let r = c
+        .delete(format!("{}/api/default/clips/{theirs}", srv.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404, "deleting");
+
+    // And it is all still there under its own band.
+    let props = get_props(&srv, &c, &format!("/bonband/clips/{theirs}")).await;
+    assert_eq!(props["clip"]["name"], "Riff");
+}
+
+/// An account in no band can sign in — the password is right — and then
+/// has nowhere to go. The web says so on a page; the JSON API says so
+/// with 403, never 401, which the app would read as a dead token.
+#[tokio::test]
+async fn a_user_in_no_band_is_told_so_rather_than_signed_out() {
+    let srv = start().await;
+    // Deliberately not `create_user`, which would put them in a band.
+    let hash = iggybilly::auth::hash_password("pw").unwrap();
+    sqlx::query("INSERT INTO users (username, password_hash, is_admin) VALUES ('nomad', ?, 0)")
+        .bind(&hash)
+        .execute(&srv.pool)
+        .await
+        .unwrap();
+
+    let c = client();
+    login(&srv, &c, "nomad", "pw").await;
+
+    let envelope = get_envelope(&srv, &c, "/").await;
+    assert_eq!(envelope["entry"], "no-band");
+    assert_eq!(envelope["props"]["username"], "nomad");
+
+    // The app's un-banded route has no band to fall back on.
+    let r = c
+        .get(format!("{}/api/v1/clips", srv.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 403, "403, so the app keeps its token");
+    let body: serde_json::Value = r.json().await.unwrap();
+    assert!(
+        body["error"].as_str().unwrap().contains("not a member"),
+        "says what is wrong: {body}"
+    );
+}
+
+/// `/` sends you to the band you were last in, and following a link into
+/// another band you belong to makes that the one you were last in — so
+/// nobody has to switch bands before a link works.
+#[tokio::test]
+async fn the_landing_page_follows_the_band_you_last_looked_at() {
+    let srv = start().await;
+    create_user(&srv.pool, "alice", "pw").await;
+    add_to_band(&srv.pool, "alice", "bonband").await;
+
+    let c = client();
+    login(&srv, &c, "alice", "pw").await;
+
+    // Arriving in bonband is enough to make it the landing band.
+    let r = c
+        .get(format!("{}/bonband/", srv.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+
+    let r = c.get(format!("{}/", srv.base)).send().await.unwrap();
+    assert_eq!(r.status(), 303);
+    assert_eq!(r.headers().get("location").unwrap(), "/bonband/");
+
+    // And back again.
+    c.get(format!("{}/default/", srv.base))
+        .send()
+        .await
+        .unwrap();
+    let r = c.get(format!("{}/", srv.base)).send().await.unwrap();
+    assert_eq!(r.headers().get("location").unwrap(), "/default/");
+}
+
+/// Being removed from the band you were last in must not leave you
+/// pointed at it. The landing query joins membership, so a stale
+/// preference falls back to a band you can still see.
+#[tokio::test]
+async fn losing_your_last_band_lands_you_somewhere_you_can_still_see() {
+    let srv = start().await;
+    create_user(&srv.pool, "alice", "pw").await;
+    add_to_band(&srv.pool, "alice", "bonband").await;
+
+    let c = client();
+    login(&srv, &c, "alice", "pw").await;
+    c.get(format!("{}/bonband/", srv.base))
+        .send()
+        .await
+        .unwrap();
+
+    // Out of bonband, by the command line's own query.
+    let band = iggybilly::queries::bands::find_by_slug(&srv.pool, "bonband")
+        .await
+        .unwrap()
+        .unwrap();
+    let user: (i64,) = sqlx::query_as("SELECT id FROM users WHERE username = 'alice'")
+        .fetch_one(&srv.pool)
+        .await
+        .unwrap();
+    iggybilly::queries::bands::remove_member(&srv.pool, band.id, user.0)
+        .await
+        .unwrap();
+
+    let r = c.get(format!("{}/", srv.base)).send().await.unwrap();
+    assert_eq!(r.status(), 303);
+    assert_eq!(r.headers().get("location").unwrap(), "/default/");
+
+    let r = c
+        .get(format!("{}/bonband/", srv.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404, "and bonband is gone from view");
+}
+
+/// The account screen lists the bands you are in and which one you are
+/// looking at, and switching is a post it makes before navigating.
+#[tokio::test]
+async fn the_account_screen_lists_your_bands_and_switches_between_them() {
+    let srv = start().await;
+    create_user(&srv.pool, "alice", "pw").await;
+    add_to_band(&srv.pool, "alice", "bonband").await;
+
+    let c = client();
+    login(&srv, &c, "alice", "pw").await;
+
+    let props = get_props(&srv, &c, "/account").await;
+    assert_eq!(
+        props["bands"],
+        serde_json::json!(["bonband", "default"]),
+        "by slug"
+    );
+
+    let r = c
+        .post(format!("{}/api/account/band", srv.base))
+        .json(&serde_json::json!({ "band": "bonband" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 204);
+    let props = get_props(&srv, &c, "/account").await;
+    assert_eq!(props["band"], "bonband");
+
+    // A band she is not in is not switchable to.
+    let r = c
+        .post(format!("{}/api/account/band", srv.base))
+        .json(&serde_json::json!({ "band": "nosuchband" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404);
+}
+
+/// A band posts to its own Discord channel when it has one, and to the
+/// instance-wide webhook when it doesn't.
+#[tokio::test]
+async fn a_band_with_its_own_webhook_posts_there_instead() {
+    let (instance_url, mut instance_rx) = mock_webhook().await;
+    let (own_url, mut own_rx) = mock_webhook().await;
+    let srv = start_with(
+        Some(instance_url),
+        Some("https://iggybilly.test".to_string()),
+    )
+    .await;
+    create_user(&srv.pool, "alice", "pw").await;
+    add_to_band(&srv.pool, "alice", "bonband").await;
+
+    let band = iggybilly::queries::bands::find_by_slug(&srv.pool, "bonband")
+        .await
+        .unwrap()
+        .unwrap();
+    iggybilly::queries::bands::set_webhook(&srv.pool, band.id, Some(&own_url))
+        .await
+        .unwrap();
+
+    let c = client();
+    login(&srv, &c, "alice", "pw").await;
+
+    upload_into(&srv, &c, "default", "Riff.mp3").await;
+    let content = next_post(&mut instance_rx).await["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        content.contains("/default/clips/"),
+        "the default band posts to the instance webhook, with its slug in the link: {content}"
+    );
+
+    upload_into(&srv, &c, "bonband", "Riff.mp3").await;
+    let content = next_post(&mut own_rx).await["content"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        content.contains("/bonband/clips/"),
+        "and bonband posts to its own: {content}"
+    );
 }

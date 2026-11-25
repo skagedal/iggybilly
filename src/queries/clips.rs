@@ -137,15 +137,26 @@ pub enum ListOrder {
     Playlist { label_id: i64 },
 }
 
-/// Every clip carrying *all* of `active` (an AND filter), in `order`.
-/// An empty filter lists everything, newest first.
-pub async fn list(pool: &SqlitePool, active: &[&str], order: ListOrder) -> AppResult<Vec<Clip>> {
+/// Every clip of `band_id` carrying *all* of `active` (an AND filter),
+/// in `order`. An empty filter lists the band's clips, newest first.
+///
+/// There is no variant without a band. "All the clips" is not a question
+/// this application has an answer to any more, and leaving a way to ask
+/// it would be leaving a way to answer it by accident.
+pub async fn list(
+    pool: &SqlitePool,
+    band_id: i64,
+    active: &[&str],
+    order: ListOrder,
+) -> AppResult<Vec<Clip>> {
     let rows: Vec<ClipRow> = if active.is_empty() {
         sqlx::query_as(&format!(
             "SELECT {CLIP_COLUMNS}
              FROM clips c JOIN users u ON u.id = c.uploaded_by
+             WHERE c.band_id = ?
              ORDER BY c.uploaded_at DESC"
         ))
+        .bind(band_id)
         .fetch_all(pool)
         .await?
     } else {
@@ -165,23 +176,30 @@ pub async fn list(pool: &SqlitePool, active: &[&str], order: ListOrder) -> AppRe
                 "ORDER BY ord.position, c.id",
             ),
         };
+        // The label join carries `l.band_id = c.band_id` rather than a
+        // bound band id of its own: labels are matched here by name, and
+        // a name belongs to as many bands as use it, so tying the label
+        // to the clip's own band is what keeps a filter from reaching
+        // across one. It costs no placeholder.
         let sql = format!(
             "SELECT {CLIP_COLUMNS}
              FROM clips c
              JOIN users u ON u.id = c.uploaded_by
              JOIN clip_labels cl ON cl.clip_id = c.id
-             JOIN labels l ON l.id = cl.label_id
+             JOIN labels l ON l.id = cl.label_id AND l.band_id = c.band_id
              {order_join}
-             WHERE l.name IN ({placeholders}) COLLATE NOCASE
+             WHERE c.band_id = ? AND l.name IN ({placeholders}) COLLATE NOCASE
              GROUP BY c.id
              HAVING COUNT(DISTINCT l.id) = ?
              {order_by}"
         );
         let mut q = sqlx::query_as(&sql);
-        // The ordering join's placeholder comes first in the statement.
+        // The ordering join's placeholder comes first in the statement,
+        // then the band in the WHERE, then the filter labels.
         if let ListOrder::Playlist { label_id } = order {
             q = q.bind(label_id);
         }
+        q = q.bind(band_id);
         for t in active {
             q = q.bind(*t);
         }
@@ -197,14 +215,20 @@ pub async fn list(pool: &SqlitePool, active: &[&str], order: ListOrder) -> AppRe
     Ok(clips)
 }
 
-/// One clip by id, or `None` if there isn't one.
-pub async fn get(pool: &SqlitePool, id: i64) -> AppResult<Option<Clip>> {
+/// One clip of `band_id` by id, or `None` if there isn't one.
+///
+/// A clip that exists in another band answers `None`, exactly as an id
+/// that was never used does. Ids stay globally unique — every link ever
+/// sent still resolves — so the band in the path is not taken to be
+/// implied by the id, it is checked against it.
+pub async fn get(pool: &SqlitePool, band_id: i64, id: i64) -> AppResult<Option<Clip>> {
     let row: Option<ClipRow> = sqlx::query_as(&format!(
         "SELECT {CLIP_COLUMNS}
          FROM clips c JOIN users u ON u.id = c.uploaded_by
-         WHERE c.id = ?"
+         WHERE c.id = ? AND c.band_id = ?"
     ))
     .bind(id)
+    .bind(band_id)
     .fetch_optional(pool)
     .await?;
 
@@ -233,10 +257,11 @@ pub async fn labels_for(pool: &SqlitePool, clip_id: i64) -> AppResult<Vec<Label>
         .collect())
 }
 
-/// Whether a clip exists, without loading it.
-pub async fn exists(pool: &SqlitePool, clip_id: i64) -> AppResult<bool> {
-    let row: Option<(i64,)> = sqlx::query_as("SELECT id FROM clips WHERE id = ?")
+/// Whether a clip exists in this band, without loading it.
+pub async fn exists(pool: &SqlitePool, band_id: i64, clip_id: i64) -> AppResult<bool> {
+    let row: Option<(i64,)> = sqlx::query_as("SELECT id FROM clips WHERE id = ? AND band_id = ?")
         .bind(clip_id)
+        .bind(band_id)
         .fetch_optional(pool)
         .await?;
     Ok(row.is_some())
@@ -253,7 +278,7 @@ pub struct AudioFile {
     pub format: Option<String>,
 }
 
-pub async fn audio_file(pool: &SqlitePool, id: i64) -> AppResult<Option<AudioFile>> {
+pub async fn audio_file(pool: &SqlitePool, band_id: i64, id: i64) -> AppResult<Option<AudioFile>> {
     type Row = (
         String,
         String,
@@ -265,9 +290,10 @@ pub async fn audio_file(pool: &SqlitePool, id: i64) -> AppResult<Option<AudioFil
     let row: Option<Row> = sqlx::query_as(
         "SELECT storage_filename, content_type, original_filename,
                 playback_filename, playback_content_type, format
-         FROM clips WHERE id = ?",
+         FROM clips WHERE id = ? AND band_id = ?",
     )
     .bind(id)
+    .bind(band_id)
     .fetch_optional(pool)
     .await?;
     Ok(row.map(
